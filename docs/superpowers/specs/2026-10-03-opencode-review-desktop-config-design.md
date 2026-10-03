@@ -1,7 +1,7 @@
 # Open Code Review 桌面端配置器 — 设计文档
 
 日期：2026-10-03
-状态：已评审待实现计划
+状态：已评审，已据实测 ocr v1.12.11 修正配置语法，待实现计划
 
 ## 1. 背景与目标
 
@@ -41,8 +41,8 @@
 **前置依赖（实现前必须满足）**：
 
 - Node.js v24（本机已有 v24.21.0）
-- Rust 稳定工具链 + Windows MSVC 构建工具（`rustc` / `cargo`）——本机当前**缺失**，需先安装 [Rustup](https://rustup.rs) 与 Visual Studio Build Tools（含 MSVC）
-- 全局安装 `ocr`：`npm i -g @alibaba-group/open-code-review`
+- Rust 稳定工具链 + Windows MSVC 构建工具（`rustc` / `cargo`）——本机当前**缺失**，需先安装 [Rustup](https://rustup.rs) 与 Visual Studio Build Tools（含 MSVC）。**这是实现第一步的硬阻塞。**
+- 全局安装 `ocr`：本机已装 `open-code-review v1.12.11`（路径 `/d/nodejs/node_global/ocr`）。新机器需 `npm i -g @alibaba-group/open-code-review`
 - 操作系统：以 Windows 11 为主目标（用户环境）；Tauri 跨平台，后续可编译 macOS/Linux 但不在此版本范围
 
 ## 3. 架构
@@ -93,54 +93,64 @@ type OcrResult = {
 
 command 清单（初版）：
 
-| command | 作用 | 调用 `ocr` |
+| command | 作用 | 调用 `ocr` / 文件 |
 |---|---|---|
-| `probe_ocr` | 探测 `ocr --version`，返回是否安装及版本 | `ocr --version` |
-| `get_provider_config` | 读取当前 LLM 配置 | `ocr config get`（逐键） |
-| `set_provider_config` | 写入 Provider/模型/key | `ocr config set llm.*`（逐条） |
-| `list_providers` | 列内置模型/provider 参考 | `ocr llm providers` |
+| `probe_ocr` | 探测 `ocr --version`，返回是否安装及版本 | `ocr --version`（经 `cmd /c`） |
+| `get_config` | 读取当前 `~/.opencodereview/config.json` | **直接读 JSON 文件**（无 `ocr config get`） |
+| `set_provider` | 写 provider 选择 | `ocr config set provider <name>` |
+| `set_provider_key` | 写某 provider 的 api_key | `ocr config set providers.<name>.api_key <val>` |
+| `set_custom_provider` | 写自定义 gateway (url/protocol) | `ocr config set custom_providers.<name>.{url,protocol}` |
+| `set_model` | 写默认 model | `ocr config set model <name>` |
+| `set_param` | 写可持久化审查参数 | `ocr config set <key> <val>`（仅 `max_tokens`/`effort` 等可持久化键） |
+| `list_providers` | 列内置 provider 参考 | `ocr llm providers` |
 | `test_connection` | 测试 LLM 连通性 | `ocr llm test` |
 | `get_rules` | 读取 rule.json（全局或仓库级） | 直接读文件 |
 | `set_rules` | 写入 rule.json | 直接写文件 |
 | `check_rules` | 验证某文件命中的规则 | `ocr rules check <file>` |
-| `get_params_config` | 读取审查参数默认值 | `ocr config get` 或文件 |
-| `set_params_config` | 写入审查参数默认值 | `ocr config set`（可持久化键） |
+
+**关键事实（实测 ocr v1.12.11）**：
+- `ocr config` **没有 `get` 子命令**，只有 `set` / `unset` / `provider` / `model`。读配置只能直接解析 `~/.opencodereview/config.json`。
+- `ocr config set` 实际可持久化的键（由 `unset` 支持集反推）：`provider` / `model` / `max_tokens` / `effort` / `providers.<name>.api_key` / `custom_providers.<name>.{url,protocol}` / `mcp_servers.<name>`。`--timeout`/`--concurrency`/`--format` 仅是 `ocr review` 运行时 flag，**不能 config set 持久化**。
+- Windows 二进制：`ocr`、`ocr.cmd`、`ocr.ps1` 共存；Rust 后端统一用 `cmd /c ocr <args>` 执行，避免 `.cmd` 解析陷阱。
 
 ## 4. 配置模型与命令映射
 
 ### 4.1 Provider / 模型
 
+**实测配置语法（v1.12.11）**：选择 provider 用 `ocr config set provider <name>`；各 provider 的 key 用 `ocr config set providers.<name>.api_key <val>`；自定义 gateway 用 `ocr config set custom_providers.<name>.{url,protocol}`；默认模型用 `ocr config set model <name>`。后端写配置**只用这些 set 命令**；读配置**直接解析 `config.json`**（无 get 命令）。
+
 表单字段（随 provider 类型动态变化）：
 
-- Provider 类型下拉：`Anthropic` / `OpenAI` / `AWS Bedrock` / `Custom`（自定义 OpenAI 兼容 URL）
-- Anthropic：`Base URL`（`https://api.anthropic.com/v1/messages`）、`API Key`、`Model`
-- OpenAI：`Base URL`、`API Key`、`Model`
-- Bedrock：`Region`、`Access Key`、`Secret Key`、`Model`
-- Custom：`Base URL`、`Auth Header 名`、`Auth Token`、`Model`
+- Provider 类型下拉：从 `ocr llm providers` 的内置列表 + `Custom` 中选择（内置含 anthropic / openai / bedrock / deepseek / kimi / qwen 系列等 30+ 项）
+- 内置 provider（anthropic/openai/bedrock/...）：`API Key`、`Model`（model 仅作默认覆盖，可为空用 provider 默认）
+- Custom（自定义 OpenAI 兼容网关）：`Gateway 名称`、`URL`、`Protocol`（openai / anthropic / openai-responses）、`API Key`、`Model`
 
 映射：
 
-- `use_anthropic`（bool）→ 选 Anthropic 时为 `true`
-- `url` → Base URL
-- `auth_token` → API Key / Token（**永不回读明文**）
-- `model` → Model 名
+- provider 类型 → `ocr config set provider <name>`（`custom_providers.<name>` 时设为该网关名）
+- api_key → `ocr config set providers.<name>.api_key <val>`（**永不回读明文**，config.json 里也可能存明文，UI 一律掩码）
+- custom url/protocol → `ocr config set custom_providers.<name>.{url,protocol}`
+- model → `ocr config set model <name>`（可选）
 
-「内置模型」参考：调 `ocr llm providers` 拉取，展示为建议列表（非强制）。
+「内置模型」参考：`ocr llm providers` 拉取 provider 列表展示为选择参考（非强制）；具体 model 名由用户填写或填 provider 默认。
 
 ### 4.2 审查参数（Params）
 
-覆盖 `ocr review` 常用默认值：
+**实测**：`ocr review --help` 暴露 `--timeout` / `--concurrency` / `--format` / `--exclude` / `--max-tokens` / `--effort` 等运行时 flag；但能 **config set 持久化**的只有 `max_tokens` 与 `effort`（由 `unset` 支持集确认）。`--timeout`/`--concurrency`/`--format`/`--exclude` 仅运行时 flag，无法持久化。
 
-| 参数 | flag | 持久化方式 |
+| 参数 | 可持久化 | 处理方式 |
 |---|---|---|
-| timeout | `--timeout` | 待 §8.2 确认是否 `config set` |
-| concurrency | `--concurrency` | 同上 |
-| format | `--format` | 同上 |
-| language | `--language` | 同上 |
-| exclude | `--exclude` | 同上 |
+| max_tokens | ✅ | `ocr config set max_tokens <n>` |
+| effort | ✅ | `ocr config set effort <low\|medium\|high>` |
+| timeout | ❌ 仅 flag | Params Tab 命令预览（复制即用） |
+| concurrency | ❌ 仅 flag | 同上 |
+| format | ❌ 仅 flag | 同上 |
+| exclude | ❌ 仅 flag | 同上 |
 
 **可持久化的键**：经 `ocr config set` 写入。
 **不可持久化的键**：在 Params Tab 以「命令片段预览（只读、可复制）」辅助，不执行、不写入——用户审查时自行拼进命令。
+
+> 注：spec 早期版本误写了 `--language` 与 `llm.url/auth_token` 等；实测 v1.12.11 中 `review` 无 `--language` flag、`config` 无 `llm.*` 键，已按真实 CLI 修正如上。
 
 ### 4.3 审查规则 rule.json（折中：直接读写文件）
 
@@ -215,26 +225,31 @@ Exclude:          [ **/generated/*,**/testdata/* ]
 
 ## 6. 数据流
 
-1. **加载**：窗口挂载 → `probe_ocr` → 已安装则并行 `get_provider_config` / `get_rules(global)` / `get_params_config` 填充表单。
-2. **保存 Provider**：表单变更 → 「保存」→ `set_provider_config`（逐条 set）→ 返回每条成功/失败 → Toast 提示。
+1. **加载**：窗口挂载 → `probe_ocr` → 已安装则并行 `get_config` / `get_rules(global)` 填充表单。
+2. **保存 Provider**：表单变更 → 「保存」→ 逐条 `set_provider` / `set_provider_key` / `set_custom_provider` / `set_model` → 返回每条成功/失败 → Toast 提示。
 3. **测试连接**：`test_connection` → 解析 `ocr llm test` 输出 → 展示 ✓/✗ 与原因。
 4. **保存规则**：编辑表格 → 「保存规则文件」→ `set_rules` 写文件（含 schema 校验）→ 失败则定位到具体规则行。
 5. **验证命中**：选文件 → `check_rules` → 展示结果。
+6. **保存参数**：Params Tab → `set_param` 写 `max_tokens`/`effort`；不可持久化项仅生成命令预览。
 
 ## 7. 边界与错误处理
 
 - **未装 ocr**：启动即 `probe_ocr`；未检测到 → 顶部红条 + 引导 `npm i -g @alibaba-group/open-code-review`，配置功能禁用但不崩溃。
-- **Windows `.cmd` 陷阱**：npm 全局装的 `ocr` 实为 `ocr.cmd` / `ocr.ps1`。Rust 中 `Command::new("ocr")` 在 Windows 找不到。后端解析 `npm bin -g` 或 `where ocr`，拼接 `.cmd`；实现时先用 `cmd /c ocr --version` 实测验证，选定最稳方案写进代码。
-- **API Key 掩码**：auth_token 输入永不回显；保存后不回读明文。
+- **Windows 执行方式（已确认）**：后端统一 `cmd /c ocr <args>` 执行，绕开 `.cmd` 解析陷阱（见 §8.4）。
+- **API Key 掩码**：config.json 中 key 可能明文存储，UI 一律掩码不回显；保存后重开窗口显示空占位。
 - **命令失败解析**：捕获 stderr 关键词（`command not found` / `connection error` / `unknown flag`）翻译成中文提示。
+- **安全纪律**：任何 `ocr config set/unset` 仅在用户显式点击「保存」时执行；实现/测试阶段不得为探测而写配置。临时改动须立即还原。
 - **规则 JSON 损坏**：`get_rules` 遇到非法 JSON → 提示「规则文件损坏，是否重置为空」而非崩溃。
 
-## 8. 实现时第一步要做的探测（非 placeholder，是启动任务）
+## 8. 实现前已完成的探测结论（实测 ocr v1.12.11，非 placeholder）
 
-1. **Provider 字段集**：以 `ocr config provider` 交互流程 + `ocr llm providers` 输出反推各 provider 完整字段，补全 §4.1 表单。
-2. **审查参数持久化**：跑 `ocr config set --help` 与 `ocr review --help` 枚举哪些参数可 `config set` 持久化；不可持久化的归入「命令预览」（§4.2 / §5.4）。
-3. **rule.json 写命令**：确认 OCR 确实无 `ocr rules set/write` 类命令（已据 SKILL.md 判断无），坐实 §4.3 直接读写文件方案。
-4. **Windows 二进制解析**：实测 `cmd /c ocr --version` 与 `where ocr` 行为，定 §7 的后端 spawn 方式。
+1. **Provider 字段集（已确认）**：`ocr llm providers` 输出 30+ 内置 provider（anthropic / openai / bedrock / deepseek / kimi / qwen 系列等），每个含 `NAME / PROTOCOL / BASE URL`。表单据此渲染 provider 下拉 + 自定义 gateway 分支。具体 api_key / model 字段见 §4.1。
+2. **审查参数持久化（已确认）**：可 `config set` 持久化的仅 `max_tokens`、`effort`；`timeout`/`concurrency`/`format`/`exclude` 仅 `ocr review` 运行时 flag，不可持久化，归入「命令预览」（§4.2 / §5.4）。
+3. **rule.json 写命令（已确认无）**：`ocr rules` 只有 `check` 子命令，无 `set/write`。坐实 §4.3 直接读写文件方案。
+4. **Windows 二进制解析（已确认）**：`ocr` / `ocr.cmd` / `ocr.ps1` 共存，`where ocr` 二者均返回。后端统一用 `cmd /c ocr <args>` 执行。
+5. **`--language` 不存在（已确认）**：`ocr review --help` 无 `--language`，`config` 也无 language 键；审查语言非本应用配置项，Params Tab 不纳入。
+
+> **安全纪律（实测教训）**：探索真实 CLI 时**绝不直接执行会写入配置的命令**（曾误执行 `ocr config set providers.anthropic.api_key foo` 污染用户全局配置，已修复）。探测一律用 `--help`、临时隔离的 config 副本或 dry-run；任何 `ocr config set/unset` 只在本应用的「用户显式点击保存」路径下执行。
 
 ## 9. 测试策略
 
