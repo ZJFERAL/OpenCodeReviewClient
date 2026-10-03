@@ -1,0 +1,26 @@
+[package]
+name = "ocr-desktop-config"
+version = "0.1.0"
+description = "Open Code Review 桌面配置器"
+authors = ["You"]
+edition = "2021"
+
+# Tauri 2: lib 入口被 main.rs 静态链接为二进制。
+# 桌面构建只需 staticlib + rlib；cdylib 仅在移动端（iOS/Android）需要。
+# 此处省略 cdylib 以规避 MinGW 8.1.0 (binutils 2.30) 的「export ordinal too large」
+# 限制——cdylib 会把数万个 Rust 符号塞进 PE 导出表，超过 65535 上限导致 ld 失败。
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"

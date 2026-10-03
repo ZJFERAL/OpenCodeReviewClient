@@ -1,0 +1,111 @@
+:root {
+  --bg: #1e1e1e;
+  --panel: #252526;
+  --border: #3c3c3c;
+  --text: #e6e6e6;
+  --muted: #9d9d9d;
+  --accent: #18d1ff;
+  --ok: #4ec96b;
+  --fail: #f14c4c;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.status-title {
+  font-weight: 600;
+}
+
+.status-badge {
+  font-size: 13px;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.status-badge.ok {
+  color: var(--ok);
+}
+
+.status-badge.fail {
+  color: var(--fail);
+}
+
+.status-badge .install-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.status-spacer {
+  flex: 1;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  color: var(--muted);
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 6px 6px 0 0;
+}
+
+.tab:hover {
+  color: var(--text);
+}
+
+.tab-active {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--border);
+}
+
+.content {
+  flex: 1;
+  overflow: auto;
+  padding: 18px;
+}
+
+.tab-panel h2 {
+  margin-top: 0;
+  font-size: 16px;
+  color: var(--accent);
+}
+
+.placeholder {
+  color: var(--muted);
+}

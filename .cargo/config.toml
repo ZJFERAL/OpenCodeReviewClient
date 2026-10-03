@@ -1,0 +1,18 @@
+# 本项目在 Windows 上用 GNU target 编译（MSVC 在本环境因 UAC 不可安装）。
+# MinGW-w64 8.1.0 的 ld 不识别 Tauri 生成的 MSVC .res 资源库（resource.lib），
+# 故改用 Rust 自带的 rust-lld 作为链接器（支持 MSVC COFF），并补 MinGW 的 lib 搜索路径。
+[build]
+target = "x86_64-pc-windows-gnu"
+
+[target.x86_64-pc-windows-gnu]
+linker = "rust-lld"
+rustflags = [
+  "-Z", "unstable-options",
+  "-C", "linker-flavor=gnu-lld",
+  "-C", "link-arg=C:/Users/Jeffery/mingw64/mingw64/x86_64-w64-mingw32/lib/crt2.o",
+  "-C", "link-arg=C:/Users/Jeffery/mingw64/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0/crtbegin.o",
+  "-L", "C:/Users/Jeffery/mingw64/mingw64/lib",
+  "-L", "C:/Users/Jeffery/mingw64/mingw64/x86_64-w64-mingw32/lib",
+  "-L", "C:/Users/Jeffery/mingw64/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0",
+  "-C", "link-arg=C:/Users/Jeffery/mingw64/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0/crtend.o",
+]
