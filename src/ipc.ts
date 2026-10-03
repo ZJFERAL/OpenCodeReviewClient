@@ -16,3 +16,9 @@ export async function invokeOcr(cmd: string, args: string[] = []): Promise<OcrRe
   void cmd;
   return invoke<OcrResult>("run_ocr", { args });
 }
+
+// 探测 ocr 是否安装并取版本号，对应 Rust 的 `probe_ocr` command。
+// 成功时 data = { version: string }，缺失时 ok=false 且 data 为 undefined。
+export async function invokeProbe(): Promise<OcrResult> {
+  return invoke<OcrResult>("probe_ocr");
+}

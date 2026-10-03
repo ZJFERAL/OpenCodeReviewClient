@@ -59,6 +59,11 @@ body,
 .status-badge .install-link {
   color: var(--accent);
   text-decoration: none;
+  background: transparent;
+  border: none;
+  padding: 0 2px;
+  font: inherit;
+  cursor: pointer;
 }
 
 .status-spacer {

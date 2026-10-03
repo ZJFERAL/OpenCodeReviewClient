@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import StatusBar from "./components/StatusBar";
-import { invokeOcr } from "./ipc";
+import { invokeProbe } from "./ipc";
 
 type ProviderTabProps = Record<string, never>;
 type RulesTabProps = Record<string, never>;
@@ -39,6 +39,15 @@ const TABS = [
   { key: "params", label: "Params", Component: ParamsTab },
 ] as const;
 
+// 从 invokeProbe 返回的 data 字段安全取出版本号（data 形如 { version: string }）。
+function dataVersion(data: unknown): string | undefined {
+  if (data && typeof data === "object" && "version" in data) {
+    const v = (data as { version: unknown }).version;
+    return typeof v === "string" && v.length > 0 ? v : undefined;
+  }
+  return undefined;
+}
+
 export default function App() {
   const [active, setActive] = useState<(typeof TABS)[number]["key"]>("provider");
   const [ocrInstalled, setOcrInstalled] = useState<boolean>(false);
@@ -46,12 +55,14 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    invokeOcr("ocr", ["--version"])
+    invokeProbe()
       .then((res) => {
         if (cancelled) return;
         if (res.ok) {
           setOcrInstalled(true);
-          setVersion(res.stdout.trim().split("\n")[0] || undefined);
+          // 优先用后端解析出的 data.version；缺失时回退到 stdout 首行。
+          const v = dataVersion(res.data) ?? (res.stdout.trim().split("\n")[0] || undefined);
+          setVersion(v);
         } else {
           setOcrInstalled(false);
         }
