@@ -37,7 +37,9 @@ fn probe_ok() {
     std::fs::create_dir_all(&mock_dir).expect("create mock dir");
     // fake ocr：打印含版本号的首行并退出 0。run_ocr 用 `cmd /c ocr`，
     // 因此放到 PATH 的必须是 `ocr.cmd`（批处理）或 `ocr.exe`。
-    let script = "echo open-code-review v9.9.9 (test build) && exit 0\r\n";
+    // 必须 `@echo off`：否则 cmd 会把命令行本身回显为 stdout 首行，
+    // 导致 parse_version 取到 `F:\...>echo ...` 而非真正的版本行。
+    let script = "@echo off\r\necho open-code-review v9.9.9 (test build)\r\nexit 0\r\n";
     std::fs::write(mock_dir.join("ocr.cmd"), script).expect("write fake ocr.cmd");
 
     let original = push_mock_to_path(&mock_dir);

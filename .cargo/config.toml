@@ -1,18 +1,15 @@
 # 本项目在 Windows 上用 GNU target 编译（MSVC 在本环境因 UAC 不可安装）。
-# MinGW-w64 8.1.0 的 ld 不识别 Tauri 生成的 MSVC .res 资源库（resource.lib），
-# 故改用 Rust 自带的 rust-lld 作为链接器（支持 MSVC COFF），并补 MinGW 的 lib 搜索路径。
+# 链接器/资源编译器用 LLVM-MinGW（clang+lld，2026 版），它：
+#   - 能正确链接 Tauri 生成的 Windows 资源（build script 以 gnu host 编译时走 windres）
+#   - 产出的 PE 可在 Win11 正常加载（旧 MinGW 8.1.0 的 ld 会产出崩 0xc0000139 的 PE）
+# 依赖：llvm-mingw-20260922-ucrt-x86_64 解压于 C:/Users/Jeffery/llvm-mingw/；
+#       gnu host 工具链 nightly-x86_64-pc-windows-gnu（使 embed-resource 走 windres）；
+#       libgcc_eh.a 用 libunwind.a 填充（提供 _Unwind_* 符号，compiler-rt 无 libgcc）。
 [build]
 target = "x86_64-pc-windows-gnu"
 
 [target.x86_64-pc-windows-gnu]
-linker = "rust-lld"
+linker = "C:/Users/Jeffery/llvm-mingw/llvm-mingw-20260922-ucrt-x86_64/bin/x86_64-w64-mingw32-gcc.exe"
 rustflags = [
-  "-Z", "unstable-options",
-  "-C", "linker-flavor=gnu-lld",
-  "-C", "link-arg=C:/Users/Jeffery/mingw64/mingw64/x86_64-w64-mingw32/lib/crt2.o",
-  "-C", "link-arg=C:/Users/Jeffery/mingw64/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0/crtbegin.o",
-  "-L", "C:/Users/Jeffery/mingw64/mingw64/lib",
-  "-L", "C:/Users/Jeffery/mingw64/mingw64/x86_64-w64-mingw32/lib",
-  "-L", "C:/Users/Jeffery/mingw64/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0",
-  "-C", "link-arg=C:/Users/Jeffery/mingw64/mingw64/lib/gcc/x86_64-w64-mingw32/8.1.0/crtend.o",
+  "-L", "C:/Users/Jeffery/llvm-mingw/llvm-mingw-20260922-ucrt-x86_64/x86_64-w64-mingw32/lib",
 ]
