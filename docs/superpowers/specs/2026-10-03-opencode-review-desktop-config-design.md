@@ -41,9 +41,15 @@
 **前置依赖（实现前必须满足）**：
 
 - Node.js v24（本机已有 v24.21.0）
-- Rust 稳定工具链 + Windows MSVC 构建工具（`rustc` / `cargo`）——本机当前**缺失**，需先安装 [Rustup](https://rustup.rs) 与 Visual Studio Build Tools（含 MSVC）。**这是实现第一步的硬阻塞。**
+- Rust 工具链：**本机用 GNU target + LLVM-MinGW**（详见下），非 MSVC。
 - 全局安装 `ocr`：本机已装 `open-code-review v1.12.11`（路径 `/d/nodejs/node_global/ocr`）。新机器需 `npm i -g @alibaba-group/open-code-review`
 - 操作系统：以 Windows 11 为主目标（用户环境）；Tauri 跨平台，后续可编译 macOS/Linux 但不在此版本范围
+
+**工具链方案（实现期实测确定，见 §12）**：本机 MSVC 因 UAC 无法在无人值守环境安装，改用 **GNU target + LLVM-MinGW**：
+- `llvm-mingw-20260922-ucrt-x86_64`（clang 23 + lld）解压于 `C:/Users/Jeffery/llvm-mingw/`
+- 编译命令：`cargo +nightly-x86_64-pc-windows-gnu build`（gnu host 使 embed-resource 走 windres 生成 GNU 资源；stable/msvc-host 产出的 PE 在 Win11 崩 `0xc0000139`）
+- 测试命令：`cargo +nightly-x86_64-pc-windows-gnu test --no-default-features`（带 tauri 的测试二进制在本机仍崩）
+- 配置固化于 `.cargo/config.toml`；详见 §12。
 
 ## 3. 架构
 
@@ -294,3 +300,34 @@ OpenCodeReviewClient/
 5. Params Tab：可持久化键 set + 命令预览。
 6. 测试：集成测试 + 手动 E2E。
 7. Windows 打包 `.msi` / `.exe`。
+
+## 12. 工具链方案（实现期实测确定）
+
+原计划用 MSVC，但本机 MSVC 工具缺失且补装需 UAC 提权——无人值守环境无法确认（安装器被动模式报 5007，提权模式 ExitCode 1、进程秒退、无新日志）。改为 GNU target 后，逐一排除了以下失败路径，最终确定 LLVM-MinGW：
+
+| 尝试 | 结果 |
+|---|---|
+| MSVC（VS2019 补装） | UAC 无法确认 → 不可行 |
+| MinGW-w64 8.1.0 的 ld | 不识别 Tauri 的 MSVC `.res` 资源库（`resource.lib: file format not recognized`） |
+| MinGW 8.1.0 + rust-lld（gnu-lld flavor） | 能编译，但产物在 Win11 崩 `0xc0000139 STATUS_ENTRYPOINT_NOT_FOUND` |
+| gnu host + MinGW 8.1.0 ld | build script 自身崩 `0xc0000139`（旧 MinGW 链接的复杂产物在 Win11 崩） |
+| **LLVM-MinGW 20260922（clang 23 + lld）** | ✅ 编译通过；主程序在 Win11 正常运行；集成测试通过 |
+
+**根因**：MinGW-w64 8.1.0（binutils 2.30，2018）太旧，与 Win11 加载器/现代 lld 不兼容；本环境可下载的新版本只有 LLVM-MinGW（GitHub release 可达，sourceforge 仅 8.1.0）。
+
+**最终方案与依赖**：
+- **LLVM-MinGW** `llvm-mingw-20260922-ucrt-x86_64` 解压于 `C:/Users/Jeffery/llvm-mingw/`（clang/lld/windres/ar 一站式，无需 MSVC、无需 UAC）
+- 需补 `libgcc_eh.a`：Rust 的 `x86_64-pc-windows-gnu` target 链接 `-lgcc -lgcc_eh`，而 LLVM-MinGW 用 compiler-rt（无 libgcc）。把 LLVM-MinGW 的 `libunwind.a` 复制为 `libgcc_eh.a`（提供 `_Unwind_*`），`libgcc.a` 用空归档占位。
+- **gnu host 工具链** `nightly-x86_64-pc-windows-gnu`：使 build script（embed-resource）以 `target_env=gnu` 编译，走 `windres` 生成 GNU 格式资源（而非 MSVC `.res`），LLVM-MinGW 才能链接。
+- **`.cargo/config.toml`**：`[build] target = "x86_64-pc-windows-gnu"`；linker 指向 LLVM-MinGW 的 `x86_64-w64-mingw32-gcc.exe`；补 lib 搜索路径。
+
+**编译/测试命令**：
+```bash
+export PATH="$HOME/.cargo/bin:$HOME/llvm-mingw/llvm-mingw-20260922-ucrt-x86_64/bin:$PATH"
+cd src-tauri
+cargo +nightly-x86_64-pc-windows-gnu build                 # 构建
+cargo +nightly-x86_64-pc-windows-gnu test --no-default-features   # 测试
+npm run build                                              # 前端
+```
+
+**已知边角限制**：带 `tauri` feature 的**测试**二进制在本机仍崩 `0xc0000139`（链接 tauri 的测试 harness 与 Win11 加载器的边角问题），故测试用 `--no-default-features`（Cargo.toml 中 `tauri` 设为 optional，`default = ["tauri"]`）。主程序与前端不受影响。
