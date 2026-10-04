@@ -20,6 +20,8 @@ fn write_fake_ocr(mock_dir: &std::path::Path) {
         ":llmtest\r\n",
         "if \"%FAKE_OCR_TEST_OK%\"==\"1\" (\r\n",
         "  echo Source: provider:mock\r\n",
+        "  echo URL:    http://127.0.0.1:1/v1\r\n",
+        "  echo Model:  gpt-5\r\n",
         "  echo pong\r\n",
         "  echo Connection test successful\r\n",
         "  exit 0\r\n",
@@ -119,6 +121,46 @@ fn set_custom_provider_builds_url_and_protocol() {
         "应拼出 custom_providers.mygw.protocol 与其值，实际 stdout=\n{}",
         r.stdout
     );
+    // I1：写入顺序应为 protocol 先行，再写 url。
+    let proto_pos = r
+        .stdout
+        .find("custom_providers.mygw.protocol")
+        .expect("应有 protocol 拼装");
+    let url_pos = r
+        .stdout
+        .find("custom_providers.mygw.url")
+        .expect("应有 url 拼装");
+    assert!(
+        proto_pos < url_pos,
+        "应先写 protocol 再写 url，实际 stdout=\n{}",
+        r.stdout
+    );
+}
+
+// I1：任一字段失败时，stderr 应带字段名与「可能半完成」提示。
+#[test]
+fn set_custom_provider_failure_mentions_field_and_half_state() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, original) = setup_mock("custom_fail");
+    // fake 脚本：非 llm test 时按 FAKE_OCR_EXIT 退出，用 1 制造首条 set 失败。
+    std::env::set_var("FAKE_OCR_EXIT", "1");
+
+    let result = app_lib::ocr::set_custom_provider("mygw", "https://x.test/v1", "openai");
+    std::env::remove_var("FAKE_OCR_EXIT");
+    teardown(&dir, &original);
+
+    let r = result.expect("应执行 cmd 成功返回");
+    assert!(!r.ok, "首条 set 失败时整体 ok 应为 false");
+    assert!(
+        r.stderr.contains("custom_providers.mygw.protocol"),
+        "stderr 应含失败字段名，实际:\n{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("半完成"),
+        "stderr 应含「可能半完成」提示，实际:\n{}",
+        r.stderr
+    );
 }
 
 #[test]
@@ -210,6 +252,73 @@ fn test_connection_parses_success() {
     assert!(
         data.get("message").and_then(|v| v.as_str()).is_some(),
         "data.message 应为字符串，实际 {:?}",
+        data
+    );
+    // I3：message 应取「成功标志行」，而非 `Source:` 之类前导行。
+    assert_eq!(
+        data.get("message").and_then(|v| v.as_str()),
+        Some("Connection test successful"),
+        "message 应为成功标志行，实际 {:?}",
+        data
+    );
+}
+
+// I2：正向标记优先于「不含 error」的负向判定——exit 0、stdout 含 "error" 字样但带成功标记时，
+// 仍应判为成功（旧逻辑 `!contains(\"error\")` 会误判为失败）。
+#[test]
+fn test_connection_success_with_error_word_in_stdout() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, original) = setup_mock("conn_errword");
+    let script = concat!(
+        "@echo off\r\n",
+        "echo Source: provider:mock\r\n",
+        "echo note: no error encountered\r\n",
+        "echo Connection test successful\r\n",
+        "exit 0\r\n",
+    );
+    std::fs::write(dir.join("ocr.cmd"), script).expect("rewrite fake ocr.cmd");
+
+    let result = app_lib::ocr::test_connection();
+    teardown(&dir, &original);
+
+    let r = result.expect("应执行 cmd 成功返回");
+    let data = r.data.expect("应有 data");
+    assert_eq!(
+        data.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "含成功标记即应判成功（不被 stdout 里的 error 词误伤），实际 {:?}",
+        data
+    );
+    assert_eq!(
+        data.get("message").and_then(|v| v.as_str()),
+        Some("Connection test successful"),
+        "message 应为成功标志行，实际 {:?}",
+        data
+    );
+}
+
+// I2：exit 0 但无正向成功标记时，不应仅凭退出码判成功。
+#[test]
+fn test_connection_exit_zero_without_marker_is_not_success() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, original) = setup_mock("conn_nomarker");
+    let script = concat!(
+        "@echo off\r\n",
+        "echo Source: provider:mock\r\n",
+        "echo something happened\r\n",
+        "exit 0\r\n",
+    );
+    std::fs::write(dir.join("ocr.cmd"), script).expect("rewrite fake ocr.cmd");
+
+    let result = app_lib::ocr::test_connection();
+    teardown(&dir, &original);
+
+    let r = result.expect("应执行 cmd 成功返回");
+    let data = r.data.expect("应有 data");
+    assert_eq!(
+        data.get("success").and_then(|v| v.as_bool()),
+        Some(false),
+        "无成功标记时不应判成功，实际 {:?}",
         data
     );
 }

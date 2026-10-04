@@ -68,6 +68,19 @@ function effectiveProvider(values: ProviderFormValues, custom: boolean): string 
   return values.provider === "custom" ? values.gateway.trim() : values.provider;
 }
 
+// 自定义网关名校验（I4）：实测含 `.` 等字符会让 `ocr config set` 失败（键路径被拆坏），
+// 故前置限制为 `^[a-z0-9][a-z0-9-]*$`（小写字母/数字开头，后接小写字母/数字/连字符）。
+export const GATEWAY_NAME_RE = /^[a-z0-9][a-z0-9-]*$/;
+
+// 校验自定义网关名；返回中文错误提示，合法则返回 undefined。
+export function validateGatewayName(name: string): string | undefined {
+  if (name.length === 0) return "请填写自定义网关名称";
+  if (!GATEWAY_NAME_RE.test(name)) {
+    return "网关名称只能包含小写字母、数字和连字符（-），且需以字母或数字开头";
+  }
+  return undefined;
+}
+
 // 下拉候选：list_providers 结果（或静态兜底）+ 配置里已有的自定义网关 + 当前值去重。
 function optionsFor(providers: string[] | undefined, config: ProviderConfig | undefined, current: string): string[] {
   const base = providers && providers.length > 0 ? providers : [...BUILTIN_PROVIDERS];
@@ -108,9 +121,13 @@ export default function ProviderForm({ provider, config, providers, onChange }: 
     setStatus({ kind: "idle", text: "" });
     const name = effectiveProvider(values, custom);
 
-    if (custom && name.length === 0) {
-      setStatus({ kind: "error", text: "保存失败：Gateway 名称（请填写自定义网关名称）" });
-      return;
+    // I4：自定义网关名前置校验（含 `.`/大写/空格等会让 ocr 命令失败），不合法则直接提示、不调用保存。
+    if (custom) {
+      const gatewayError = validateGatewayName(name);
+      if (gatewayError) {
+        setStatus({ kind: "error", text: `保存失败：Gateway 名称（${gatewayError}）` });
+        return;
+      }
     }
 
     // 逐条保存；某条失败时抛出带「字段名」的错误，由下方统一转成中文提示。

@@ -120,6 +120,45 @@ describe("ProviderForm 测试连接", () => {
   });
 });
 
+// I4：自定义网关名前置校验（含 `.`/大写/空格等会让 ocr 命令失败）。
+describe("ProviderForm 网关名校验", () => {
+  it("网关名含 `.` 时不触发任何保存调用，并显示中文提示", async () => {
+    render(<ProviderForm provider="custom" />);
+    // provider=custom 分支下，填一个含 `.` 的非法网关名。
+    fireEvent.change(screen.getByLabelText("Gateway 名称"), { target: { value: "my.gw" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://x/v1" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/保存失败：Gateway 名称/)).toBeInTheDocument()
+    );
+    // 非法名称不得下发任何保存命令。
+    expect(mSetProvider).not.toHaveBeenCalled();
+    expect(mSetCustom).not.toHaveBeenCalled();
+    expect(mSetProviderKey).not.toHaveBeenCalled();
+    expect(mSetModel).not.toHaveBeenCalled();
+  });
+
+  it("合法网关名（小写+连字符）正常保存", async () => {
+    render(<ProviderForm provider="custom" />);
+    fireEvent.change(screen.getByLabelText("Gateway 名称"), { target: { value: "my-gw-2" } });
+    fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://x/v1" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mSetCustom).toHaveBeenCalled());
+    expect(mSetProvider).toHaveBeenCalledWith("my-gw-2");
+    expect(mSetCustom).toHaveBeenCalledWith("my-gw-2", "https://x/v1", "openai");
+  });
+
+  it("网关名为空时提示填写且不保存", async () => {
+    render(<ProviderForm provider="custom" />);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(screen.getByText(/请填写自定义网关名称/)).toBeInTheDocument());
+    expect(mSetProvider).not.toHaveBeenCalled();
+  });
+});
+
 // 核心联动：内置 provider 分支显示 API Key + Model，隐藏自定义网关字段；
 // 自定义分支显示 Gateway/URL/Protocol + API Key，隐藏「内置」专属字段。
 describe("ProviderForm 字段联动", () => {

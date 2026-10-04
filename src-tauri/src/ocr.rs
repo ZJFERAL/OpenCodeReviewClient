@@ -151,13 +151,15 @@ pub fn set_provider_key(provider: &str, key: &str) -> Result<OcrResult, String> 
     run_ocr(&["config", "set", &path, key])
 }
 
-// 写入自定义网关：`custom_providers.<name>.{url,protocol}`（实测落盘位置）。
-// 任一字段失败即返回该失败结果，并把字段名标注进 stderr 便于 UI 定位（审查焦点 #2）。
-// 两条命令的 stdout/stderr 合并，便于调用方/测试一次看到全部下发内容。
+// 写入自定义网关：`custom_providers.<name>.{protocol,url}`（实测落盘位置）。
+// 顺序：**先 protocol 再 url**——ocr 无事务/回滚；实测缺 protocol 时该网关不可用，
+// 故优先保证 protocol 落地；若后写 url 失败，网关已有可用 protocol，半状态影响更小。
+// 任一字段失败即返回该失败结果，并把字段名 + 「可能半完成」提示写进 stderr 便于 UI 定位
+// （审查焦点 #2 / I1）。两条命令的 stdout/stderr 合并，便于调用方/测试一次看到全部下发内容。
 pub fn set_custom_provider(name: &str, url: &str, protocol: &str) -> Result<OcrResult, String> {
     let fields = [
-        (format!("custom_providers.{name}.url"), url),
         (format!("custom_providers.{name}.protocol"), protocol),
+        (format!("custom_providers.{name}.url"), url),
     ];
     let mut stdout = String::new();
     let mut stderr = String::new();
@@ -166,7 +168,10 @@ pub fn set_custom_provider(name: &str, url: &str, protocol: &str) -> Result<OcrR
         let r = run_ocr(&["config", "set", &path, value])?;
         stdout.push_str(&r.stdout);
         if !r.ok {
-            stderr.push_str(&format!("{path}: {}\n", r.stderr.trim()));
+            stderr.push_str(&format!(
+                "{path}: {}（自定义网关配置可能处于半完成状态，请重试保存）\n",
+                r.stderr.trim()
+            ));
             return Ok(OcrResult {
                 ok: false,
                 exit_code: r.exit_code,
@@ -196,20 +201,30 @@ pub fn set_model(model: &str) -> Result<OcrResult, String> {
     run_ocr(&["config", "set", "model", model])
 }
 
+// 判定一行是否为「连接测试成功」的正向标记行。
+// 隔离 HOME 实测：成功 stdout 末段为 `✓ Connection test successful`（✓ = U+2713），
+// 失败则 exit≠0 且 stderr 含 `Error:`。故以退出码为主信号 + 正向标记为辅，避免
+// 仅靠「不含 error」的负向判定（如模型回复里恰好出现 "error" 就会误判失败）。
+fn is_success_marker_line(line: &str) -> bool {
+    let lower = line.to_lowercase();
+    lower.contains("successful") || line.contains('✓')
+}
+
 // `llm test`：向当前配置的 LLM 发一条测试对话。
-// success 判定：退出码 0 且输出不含 error 关键词（成功时 stdout 含
-// `✓ Connection test successful`；失败时退出非 0、stderr 含 `Error:`）。
+// success = 退出码 0 且 stdout/stderr 合并体含正向成功标记（`successful` 或 `✓`）。
+// message：优先取含成功标记的那一行（避免拿到 `Source: ...` 之类前导行），
+// 找不到再回退首个非空行；失败时取 stderr（为空则取 stdout）。
 // data = { success: bool, message: String }。
 pub fn test_connection() -> Result<OcrResult, String> {
     let mut r = run_ocr(&["llm", "test"])?;
-    let mut lower = r.stdout.to_lowercase();
-    lower.push_str(&r.stderr.to_lowercase());
-    let success = r.ok && !lower.contains("error");
+    let combined_has_marker = r.stdout.lines().chain(r.stderr.lines()).any(is_success_marker_line);
+    let success = r.ok && combined_has_marker;
     let message = if success {
         r.stdout
             .lines()
             .map(str::trim)
-            .find(|l| !l.is_empty())
+            .find(|l| !l.is_empty() && is_success_marker_line(l))
+            .or_else(|| r.stdout.lines().map(str::trim).find(|l| !l.is_empty()))
             .unwrap_or("")
             .to_string()
     } else {
