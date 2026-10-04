@@ -7,6 +7,7 @@ import {
   invokeSetProviderKey,
   invokeSetCustomProvider,
   invokeSetModel,
+  invokeSetParam,
   invokeTestConnection,
 } from "../ipc";
 import { WithToasts } from "../test-utils";
@@ -19,6 +20,7 @@ vi.mock("../ipc", async (importOriginal) => ({
   invokeSetProviderKey: vi.fn(),
   invokeSetCustomProvider: vi.fn(),
   invokeSetModel: vi.fn(),
+  invokeSetParam: vi.fn(),
   invokeTestConnection: vi.fn(),
 }));
 
@@ -27,6 +29,7 @@ const mSetProvider = vi.mocked(invokeSetProvider);
 const mSetProviderKey = vi.mocked(invokeSetProviderKey);
 const mSetCustom = vi.mocked(invokeSetCustomProvider);
 const mSetModel = vi.mocked(invokeSetModel);
+const mSetParam = vi.mocked(invokeSetParam);
 const mTestConn = vi.mocked(invokeTestConnection);
 
 beforeEach(() => {
@@ -34,6 +37,7 @@ beforeEach(() => {
   mSetProviderKey.mockReset().mockResolvedValue(ok);
   mSetCustom.mockReset().mockResolvedValue(ok);
   mSetModel.mockReset().mockResolvedValue(ok);
+  mSetParam.mockReset().mockResolvedValue(ok);
   mTestConn.mockReset();
 });
 
@@ -53,6 +57,18 @@ describe("ProviderForm 保存触发", () => {
     expect(mSetCustom).not.toHaveBeenCalled();
     // 保存成功经全局 Toast 展示。
     await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+  });
+
+  // Important-1 回归：Max Tokens / Effort 有值时保存必须下发 set_param（此前被静默丢弃却提示「已保存」）。
+  it("Max Tokens / Effort 有值时保存调用 set_param", async () => {
+    render(<ProviderForm provider="anthropic" />);
+    fireEvent.change(screen.getByLabelText("Max Tokens"), { target: { value: "8192" } });
+    fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "high" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mSetParam).toHaveBeenCalled());
+    expect(mSetParam).toHaveBeenCalledWith("max_tokens", "8192");
+    expect(mSetParam).toHaveBeenCalledWith("effort", "high");
   });
 
   // 空串 api_key = 「未输入」，不得覆盖已有 key（Task 4 reviewer 语义）。

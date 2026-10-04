@@ -83,6 +83,26 @@ fn set_provider_key_builds_dotted_key_path() {
     );
 }
 
+// Critical-1 回归：含 `&`（且无空格）的值不得被 cmd 二次解析截断。
+// 现状修复前 `sk-a&b=c` 会落盘 `sk-a` 并执行 `b=c`；改为直接 spawn ocr.cmd 后应完整传递。
+#[test]
+fn set_provider_key_preserves_special_chars() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, original) = setup_mock("special");
+    std::env::remove_var("FAKE_OCR_EXIT");
+
+    let key = "sk-a&b=c^d|e";
+    let result = app_lib::ocr::set_provider_key("openai", key);
+    teardown(&dir, &original);
+
+    let r = result.expect("应执行成功返回");
+    assert!(
+        r.stdout.contains(key),
+        "含特殊字符的 key 应完整传给子进程，实际 stdout=\n{}",
+        r.stdout
+    );
+}
+
 #[test]
 fn set_provider_builds_provider_arg() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());

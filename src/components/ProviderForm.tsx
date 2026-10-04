@@ -3,11 +3,16 @@ import { BUILTIN_PROVIDERS, CUSTOM_PROTOCOLS, type ProviderConfig } from "../typ
 import {
   invokeSetCustomProvider,
   invokeSetModel,
+  invokeSetParam,
   invokeSetProvider,
   invokeSetProviderKey,
   invokeTestConnection,
   translateError,
 } from "../ipc";
+
+// 与 Params Tab 一致的校验：max_tokens 必须正整数；effort 限三档。
+const MAX_TOKENS_RE = /^\d+$/;
+const EFFORT_LEVELS = ["low", "medium", "high"] as const;
 import type { ToastApi } from "./Toast";
 
 // 表单本地值。provider 为当前选中的 provider 名（"custom" 表示自定义网关分支）。
@@ -156,6 +161,20 @@ export default function ProviderForm({ provider, config, providers, onChange, to
       // model 空串 = 不写入。
       if (values.model.length > 0) {
         await step("Model", () => invokeSetModel(values.model));
+      }
+      // Max Tokens / Effort 与 Params Tab 写同一 config 键；此处有值则一并持久化，
+      // 避免「表单里能编辑却不生效却提示已保存」的静默丢失。
+      if (values.maxTokens.length > 0) {
+        if (!MAX_TOKENS_RE.test(values.maxTokens)) {
+          throw new Error("Max Tokens｜必须为正整数");
+        }
+        await step("Max Tokens", () => invokeSetParam("max_tokens", values.maxTokens));
+      }
+      if (values.effort.length > 0) {
+        if (!EFFORT_LEVELS.includes(values.effort as (typeof EFFORT_LEVELS)[number])) {
+          throw new Error("Effort｜必须为 low / medium / high");
+        }
+        await step("Effort", () => invokeSetParam("effort", values.effort));
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

@@ -13,12 +13,12 @@ pub struct OcrResult {
     pub data: Option<serde_json::Value>,
 }
 
-// 拼装 `cmd /c ocr <args>` 并执行，返回退出码 + 标准输出/错误。
-// Windows 下 `Command::new("ocr")` 找不到可执行文件，必须经由 `cmd /c`（spec §8.4）。
-// 当前为桩：不实际运行 ocr 命令，仅在 ocr 缺失时报告错误。
+// 直接执行 `ocr.cmd`（npm 全局装的 ocr 在 Windows 上即 ocr.cmd），返回退出码 + 标准输出/错误。
+// **不经 `cmd /c`**：后者对「含 & ^ | > 但无空格」的参数不加引号，会被 cmd 二次解析，
+// 导致值被静默截断（如 api_key / URL 里 `&` 之后的内容丢失）甚至命令注入。
+// 直接 spawn 时 Rust 会为含特殊字符的参数正确加引号转义（实测 `sk-a&b` 可完整传递）。
 pub fn run_ocr(args: &[&str]) -> Result<OcrResult, String> {
-    let mut cmd = std::process::Command::new("cmd");
-    cmd.arg("/c").arg("ocr");
+    let mut cmd = std::process::Command::new("ocr.cmd");
     for a in args {
         cmd.arg(a);
     }
@@ -40,7 +40,14 @@ pub fn run_ocr(args: &[&str]) -> Result<OcrResult, String> {
                 data: None,
             })
         }
-        Err(e) => Err(format!("无法执行 ocr（cmd /c ocr 失败）：{e}")),
+        // ocr.cmd 不存在（未安装 ocr）→ 返回 ok=false 的合法结果，供 probe_ocr 判「未安装」。
+        Err(e) => Ok(OcrResult {
+            ok: false,
+            exit_code: -1,
+            stdout: String::new(),
+            stderr: format!("无法执行 ocr（未找到 ocr.cmd）：{e}"),
+            data: None,
+        }),
     }
 }
 
