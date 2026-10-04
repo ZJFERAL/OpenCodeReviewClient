@@ -29,3 +29,20 @@ export const BUILTIN_PROVIDERS = [
 export const CUSTOM_PROTOCOLS = ["openai", "anthropic", "openai-responses"] as const;
 
 export type CustomProtocol = (typeof CUSTOM_PROTOCOLS)[number];
+
+// 审查规则（spec §4.3）。真实 rule.json 落盘键名为 snake_case
+// （`merge_system_rule`），前端统一用 camelCase `mergeSystemRule`，
+// 由 ipc 层读写时做键名映射（与 ProviderConfig 的处理一致）。
+export type Rule = {
+  path: string;
+  rule: string;
+  mergeSystemRule: boolean;
+};
+
+// rule.json 的顶层结构。
+export type RulesFile = {
+  rules: Rule[];
+};
+
+// Rules Tab 的作用范围：全局 `~/.opencodereview/rule.json` 或仓库级 `<repo>/.opencodereview/rule.json`。
+export type RulesScope = "global" | "repo";

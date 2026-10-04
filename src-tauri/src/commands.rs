@@ -67,3 +67,28 @@ pub fn test_connection() -> Result<OcrResult, String> {
 pub fn list_providers() -> Result<OcrResult, String> {
     crate::ocr::list_providers()
 }
+
+// ---- Rules Tab（spec §4.3）----
+
+// 读取 rule.json：scope ∈ {global, repo}；repo 需 repo_path。
+// 文件缺失 → {rules:[]}（不报错）；损坏 JSON → ok=false 且 stderr 含 `invalid json`。
+#[cfg(feature = "tauri")]
+#[tauri::command]
+pub fn get_rules(scope: String, repo_path: Option<String>) -> OcrResult {
+    crate::ocr::get_rules_result(&scope, repo_path.as_deref())
+}
+
+// 写入 rule.json：写前逐条校验 path/rule 非空、mergeSystemRule 为 bool；
+// 失败 ok=false 且 stderr 带行号定位。原子写（临时文件 + rename）。
+#[cfg(feature = "tauri")]
+#[tauri::command]
+pub fn set_rules(scope: String, repo_path: Option<String>, rules: serde_json::Value) -> OcrResult {
+    crate::ocr::set_rules_result(&scope, repo_path.as_deref(), &rules)
+}
+
+// 验证某文件命中的规则：`ocr rules check <file> [--repo <repo>]`，data 为命中规则文本。
+#[cfg(feature = "tauri")]
+#[tauri::command]
+pub fn check_rules(file: String, repo: Option<String>) -> Result<OcrResult, String> {
+    crate::ocr::check_rules_result(&file, repo.as_deref())
+}

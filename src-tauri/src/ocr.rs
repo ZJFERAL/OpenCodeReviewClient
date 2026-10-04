@@ -325,3 +325,244 @@ pub fn get_config_result_at(path: &Path) -> OcrResult {
 pub fn get_config_result() -> OcrResult {
     get_config_result_at(&config_path())
 }
+
+// ---- 审查规则 rule.json（spec §4.3：直接读写文件，其余全走 CLI）----
+//
+// 真实结构（隔离 HOME 实测 ocr v1.12.11）：
+//   {"rules":[{"path":"**/*.java","rule":"...","merge_system_rule":true}]}
+// 键名 snake_case；`merge_system_rule` 为 bool，可省略（缺省等价 false = 不合并系统规则）。
+// 前端契约用 camelCase `mergeSystemRule`（src/types.ts），读写时在此做键名映射。
+
+// 解析规则文件路径：global → `~/.opencodereview/rule.json`；
+// repo → `<repo_path>/.opencodereview/rule.json`（scope=repo 时 repo_path 必填）。
+pub fn rules_path_for(scope: &str, repo_path: Option<&str>) -> Result<PathBuf, String> {
+    match scope {
+        "global" => {
+            let home = dirs::home_dir().or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| std::env::var("USERPROFILE").ok().filter(|s| !s.is_empty()))
+                    .map(PathBuf::from)
+            });
+            match home {
+                Some(h) => Ok(h.join(".opencodereview").join("rule.json")),
+                None => Ok(PathBuf::from(".opencodereview").join("rule.json")),
+            }
+        }
+        "repo" => {
+            let repo = repo_path
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| "仓库级规则需要提供 repo_path（未选择仓库目录）".to_string())?;
+            Ok(PathBuf::from(repo).join(".opencodereview").join("rule.json"))
+        }
+        other => Err(format!("未知的作用范围 scope：{other}（应为 global 或 repo）")),
+    }
+}
+
+// 把文件里的单条规则归一为前端契约形状：
+//   { path: String, rule: String, mergeSystemRule: bool }
+// 键名兼容 snake_case（真实落盘）与 camelCase；merge 缺省为 false。
+fn normalize_rule(v: &serde_json::Value) -> serde_json::Value {
+    let obj = v.as_object();
+    let str_field = |k: &str| -> String {
+        obj.and_then(|o| o.get(k))
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let merge = obj
+        .and_then(|o| o.get("merge_system_rule").or_else(|| o.get("mergeSystemRule")))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    serde_json::json!({
+        "path": str_field("path"),
+        "rule": str_field("rule"),
+        "mergeSystemRule": merge,
+    })
+}
+
+// 读规则 JSON：
+// - 文件不存在 → `{ "rules": [] }`（spec §4.3「缺失即空」）
+// - 内容非法 → `Err`，消息含 `invalid json`（供 UI 提示，不 panic）
+// - 合法 → 归一为 `{ "rules": [{path, rule, mergeSystemRule}] }`
+pub fn read_rules_at(path: &Path) -> Result<serde_json::Value, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(serde_json::json!({ "rules": [] }));
+        }
+        Err(e) => return Err(format!("无法读取 {}：{e}", path.display())),
+    };
+    if text.trim().is_empty() {
+        return Ok(serde_json::json!({ "rules": [] }));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("invalid json in {}: {e}", path.display()))?;
+    // 读取路径宽松：rules 缺失/非数组时归一为空列表，而不是报错。
+    let rules = parsed
+        .get("rules")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().map(normalize_rule).collect::<Vec<_>>())
+        .unwrap_or_default();
+    Ok(serde_json::json!({ "rules": rules }))
+}
+
+// `get_rules` 的实现体（无 tauri 依赖，便于集成测试）。
+pub fn read_rules_result_at(path: &Path) -> OcrResult {
+    match read_rules_at(path) {
+        Ok(data) => OcrResult {
+            ok: true,
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            data: Some(data),
+        },
+        Err(msg) => OcrResult {
+            ok: false,
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: msg,
+            data: None,
+        },
+    }
+}
+
+// `get_rules(scope, repo_path?)`：解析路径后读取；repo 目录不存在时同样返回空规则集（审查焦点 #4）。
+pub fn get_rules_result(scope: &str, repo_path: Option<&str>) -> OcrResult {
+    match rules_path_for(scope, repo_path) {
+        Ok(path) => read_rules_result_at(&path),
+        Err(msg) => OcrResult {
+            ok: false,
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: msg,
+            data: None,
+        },
+    }
+}
+
+// 校验并落盘规则文件。写前逐条校验（spec §4.3：path 必填非空、rule 必填非空、
+// mergeSystemRule 为 bool）；失败消息带「第 N 条规则」与行号，供 UI 定位。
+// 原子写：先写同目录临时文件，再 rename 覆盖，避免半写坏文件。
+pub fn write_rules_at(path: &Path, rules: &serde_json::Value) -> Result<(), String> {
+    let arr = rules
+        .get("rules")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "规则文件格式错误：缺少 `rules` 数组".to_string())?;
+
+    // 先构造「用于行号定位」的缩进渲染，数组里每个元素占一行 `    {`。
+    let pretty_for_lines = serde_json::to_string_pretty(&serde_json::json!({ "rules": arr }))
+        .unwrap_or_default();
+    let rule_line_numbers = rule_start_lines(&pretty_for_lines);
+
+    let mut out: Vec<serde_json::Value> = Vec::with_capacity(arr.len());
+    for (i, r) in arr.iter().enumerate() {
+        let line = rule_line_numbers.get(i).copied().unwrap_or(0);
+        let obj = r
+            .as_object()
+            .ok_or_else(|| format!("第 {} 条规则（约第 {} 行）不是对象", i + 1, line))?;
+        let p = obj.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        if p.trim().is_empty() {
+            return Err(format!("第 {} 条规则（约第 {} 行）：path 不能为空", i + 1, line));
+        }
+        let rule = obj.get("rule").and_then(|v| v.as_str()).unwrap_or("");
+        if rule.trim().is_empty() {
+            return Err(format!("第 {} 条规则（约第 {} 行）：rule 不能为空", i + 1, line));
+        }
+        let merge = obj
+            .get("mergeSystemRule")
+            .or_else(|| obj.get("merge_system_rule"))
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| {
+                format!(
+                    "第 {} 条规则（约第 {} 行）：mergeSystemRule 必须为布尔值（true/false）",
+                    i + 1,
+                    line
+                )
+            })?;
+        // 回写真实落盘键名（snake_case）。
+        out.push(serde_json::json!({
+            "path": p,
+            "rule": rule,
+            "merge_system_rule": merge,
+        }));
+    }
+
+    let text = serde_json::to_string_pretty(&serde_json::json!({ "rules": out }))
+        .map_err(|e| format!("序列化规则失败：{e}"))?;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("无法创建目录 {}：{e}", parent.display()))?;
+    }
+    let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
+    std::fs::write(&tmp, text.as_bytes())
+        .map_err(|e| format!("无法写入临时文件 {}：{e}", tmp.display()))?;
+    // Windows 上 rename 到已存在目标会失败，先移除旧文件再 rename（同目录、尽量小窗口）。
+    if path.exists() {
+        let _ = std::fs::remove_file(path);
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("无法写回 {}：{e}", path.display())
+    })
+}
+
+// 从缩进序列化结果里取每个数组元素 `    {` 的 1-based 行号。
+fn rule_start_lines(pretty: &str) -> Vec<usize> {
+    pretty
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| *l == "    {")
+        .map(|(idx, _)| idx + 1)
+        .collect()
+}
+
+// `set_rules(scope, repo_path?, rules)` 的实现体。
+pub fn set_rules_result(scope: &str, repo_path: Option<&str>, rules: &serde_json::Value) -> OcrResult {
+    let path = match rules_path_for(scope, repo_path) {
+        Ok(p) => p,
+        Err(msg) => {
+            return OcrResult {
+                ok: false,
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: msg,
+                data: None,
+            };
+        }
+    };
+    match write_rules_at(&path, rules) {
+        Ok(()) => OcrResult {
+            ok: true,
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            data: None,
+        },
+        Err(msg) => OcrResult {
+            ok: false,
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: msg,
+            data: None,
+        },
+    }
+}
+
+// `check_rules(file, repo?)`：调 `ocr rules check <file> [--repo <repo>]`，
+// 成功时把命中规则文本放进 data。
+pub fn check_rules_result(file: &str, repo: Option<&str>) -> Result<OcrResult, String> {
+    let mut args: Vec<&str> = vec!["rules", "check", file];
+    if let Some(r) = repo.map(str::trim).filter(|s| !s.is_empty()) {
+        args.push("--repo");
+        args.push(r);
+    }
+    let mut r = run_ocr(&args)?;
+    if r.ok {
+        r.data = Some(serde_json::Value::String(r.stdout.clone()));
+    }
+    Ok(r)
+}

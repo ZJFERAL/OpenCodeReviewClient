@@ -27,12 +27,16 @@ dirs = "7"
 # 会报 STATUS_ENTRYPOINT_NOT_FOUND 0xc0000139）。构建/运行真实 app 时显式开启：
 # `cargo +nightly build --features tauri` 或 `npm run tauri -- dev --features tauri`。
 tauri = { version = "2", features = [], optional = true }
+# Rules Tab 的「选仓库目录」「选文件」需要原生对话框（spec §5.3）。
+# 与 tauri 一样设为 optional 并随 default feature 启用；--no-default-features 集成测试
+# 不链接它，避免把 GUI 运行时依赖带进测试二进制。
+tauri-plugin-dialog = { version = "2", optional = true }
 
 [features]
 # 默认启用 `tauri`，保持与既有 `cargo build` / `npm run tauri dev` 工作流一致（app 正常构建）。
 # 集成测试用 `cargo test --no-default-features` 运行：关掉 tauri feature 后二进制不链接 tauri、
 # build.rs 跳过 tauri_build，从而在本机 MinGW+rust-lld 环境下可干净编译（运行期受工具链限制另见报告）。
-default = ["tauri"]
+default = ["tauri", "tauri-plugin-dialog"]
 
 [profile.release]
 panic = "abort"

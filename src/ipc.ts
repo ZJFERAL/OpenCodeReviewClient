@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { ProviderConfig } from "./types";
+import type { ProviderConfig, RulesFile, RulesScope } from "./types";
 
 // 贯穿所有后续任务的核心结果类型。
 export type OcrResult = {
@@ -172,4 +172,61 @@ export async function invokeListProviders(): Promise<OcrResult & { providers?: P
     });
   }
   return { ...res, providers };
+}
+
+// ---- Rules Tab（spec §4.3：直接读写 rule.json）----
+
+// 把后端 `get_rules` 的 data 归一为 RulesFile。
+// 后端已把真实落盘键名（snake_case `merge_system_rule`）映射为 camelCase
+// `mergeSystemRule`；这里再防御一次：接受两种键名，缺失归一为 bool false、
+// path/rule 非字符串归一为空串，保证类型安全（数据来自用户手改的文件）。
+export function normalizeRules(data: unknown): RulesFile {
+  const out: RulesFile = { rules: [] };
+  if (!data || typeof data !== "object") return out;
+  const raw = (data as Record<string, unknown>).rules;
+  if (!Array.isArray(raw)) return out;
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const it = item as Record<string, unknown>;
+    const mergeRaw = it.mergeSystemRule ?? it.merge_system_rule;
+    out.rules.push({
+      path: typeof it.path === "string" ? it.path : "",
+      rule: typeof it.rule === "string" ? it.rule : "",
+      mergeSystemRule: typeof mergeRaw === "boolean" ? mergeRaw : false,
+    });
+  }
+  return out;
+}
+
+// 读取规则文件，对应 Rust 的 `get_rules` command。
+// repo 作用范围需传 repoPath；文件缺失返回空规则集（ok=true），损坏 JSON 时 ok=false。
+export async function invokeGetRules(
+  scope: RulesScope,
+  repoPath?: string
+): Promise<OcrResult & { rulesFile?: RulesFile }> {
+  const res = await invoke<OcrResult>("get_rules", { scope, repoPath: repoPath ?? null });
+  if (res.ok) {
+    return { ...res, rulesFile: normalizeRules(res.data) };
+  }
+  return res;
+}
+
+// 写入规则文件，对应 Rust 的 `set_rules` command。
+// 写前由后端逐条校验（path/rule 非空、mergeSystemRule 为 bool），失败 stderr 含行号。
+export async function invokeSetRules(
+  scope: RulesScope,
+  repoPath: string | undefined,
+  rulesFile: RulesFile
+): Promise<OcrResult> {
+  return invoke<OcrResult>("set_rules", { scope, repoPath: repoPath ?? null, rules: rulesFile });
+}
+
+// 验证某文件命中的规则，对应 Rust 的 `check_rules` command（`ocr rules check <file>`）。
+// 成功时 data 为命中规则文本。
+export async function invokeCheckRules(
+  file: string,
+  repoPath?: string
+): Promise<OcrResult & { matched?: string }> {
+  const res = await invoke<OcrResult>("check_rules", { file, repo: repoPath ?? null });
+  return { ...res, matched: typeof res.data === "string" ? res.data : undefined };
 }

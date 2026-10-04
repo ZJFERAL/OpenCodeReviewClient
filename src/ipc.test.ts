@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeConfig } from "./ipc";
+import { normalizeConfig, normalizeRules } from "./ipc";
 
 // 覆盖真实 config.json schema 的键名映射（Important-1）：
 // model 在设过 provider 后嵌在 providers.<name>.model，而非顶层。
@@ -43,5 +43,25 @@ describe("normalizeConfig model 兜底", () => {
     expect(cfg.effort).toBe("high");
     // 已有 api_key → 标记存在（空串占位），不回读明文。
     expect(cfg.providers?.anthropic?.apiKey).toBe("");
+  });
+});
+
+// Rules Tab：后端 data → RulesFile 的键名映射（真实落盘 snake_case → 前端 camelCase）。
+describe("normalizeRules", () => {
+  it("snake_case merge_system_rule 映射为 camelCase mergeSystemRule", () => {
+    const rf = normalizeRules({
+      rules: [{ path: "**/*.java", rule: "检查空指针", merge_system_rule: true }],
+    });
+    expect(rf.rules).toEqual([
+      { path: "**/*.java", rule: "检查空指针", mergeSystemRule: true },
+    ]);
+  });
+
+  it("缺 merge 字段时归一为 false；非对象 data 返回空规则集", () => {
+    expect(normalizeRules({ rules: [{ path: "a", rule: "b" }] }).rules[0].mergeSystemRule).toBe(
+      false
+    );
+    expect(normalizeRules(null)).toEqual({ rules: [] });
+    expect(normalizeRules({ rules: "not-array" })).toEqual({ rules: [] });
   });
 });

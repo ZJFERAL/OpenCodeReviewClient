@@ -1,19 +1,10 @@
 import { useEffect, useState } from "react";
 import StatusBar from "./components/StatusBar";
 import ProviderTab from "./tabs/ProviderTab";
+import RulesTab from "./tabs/RulesTab";
 import { invokeProbe } from "./ipc";
 
-type RulesTabProps = Record<string, never>;
 type ParamsTabProps = Record<string, never>;
-
-function RulesTab(_props: RulesTabProps) {
-  return (
-    <section className="tab-panel">
-      <h2>Rules</h2>
-      <p className="placeholder">Rules 配置（待实现）。</p>
-    </section>
-  );
-}
 
 function ParamsTab(_props: ParamsTabProps) {
   return (

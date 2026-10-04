@@ -10,7 +10,12 @@ pub mod ocr;
 #[cfg(feature = "tauri")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Rules Tab 的原生对话框插件（选仓库目录/选文件）。与 tauri 同属 default feature，
+    // 用独立 cfg 门控，以便只开 `tauri`（不带 dialog）时仍可构建。
+    #[cfg(feature = "tauri-plugin-dialog")]
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    builder
         .invoke_handler(tauri::generate_handler![
             commands::run_ocr,
             commands::probe_ocr,
@@ -20,7 +25,10 @@ pub fn run() {
             commands::set_custom_provider,
             commands::set_model,
             commands::test_connection,
-            commands::list_providers
+            commands::list_providers,
+            commands::get_rules,
+            commands::set_rules,
+            commands::check_rules
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
