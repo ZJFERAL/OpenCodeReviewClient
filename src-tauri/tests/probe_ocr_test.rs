@@ -134,13 +134,14 @@ fn probe_ok_without_version() {
     );
 }
 
-// 审查焦点 #5（Task 9 归属）：`run_ocr` 必须经 `cmd /c ocr <args>` 执行，而非 `Command::new("ocr")`。
-// 直接 `Command::new("ocr")` 在本机找不到 `ocr.cmd`（CreateProcess 不解析 .cmd）会 spawn 失败；
-// 即便能找到 .exe，也绕过了 shell 对批处理/内建命令的解析。本用例让 fake `ocr.cmd` 回显
-// `%CMDCMDLINE%`（由 cmd 展开为完整命令行），从而**显式**断言父进程命令行形如
-// `...\cmd.exe /c ocr <args>`——这是「确经 cmd /c 拼装」的直接证据，而非仅靠「能跑通」的间接推断。
+// 审查焦点 #5（Task 9 归属，最终 review 后订正）：`run_ocr` 必须能**找到并执行** ocr。
+// 实现用 `Command::new("ocr.cmd")` 直接 spawn（**不经** `cmd /c`：裸拼会让含 & ^ | 的值
+// 被 cmd 二次解析截断，见 provider_save_test 的 special_chars 用例）。
+// 本机 npm 全局装的是 `ocr.cmd`；`Command::new("ocr")`（无扩展名）CreateProcess 不解析 .cmd，
+// 会 spawn 失败。本用例前置 fake `ocr.cmd` 并回显 `%CMDCMDLINE%`/`%*`，断言：
+// ① ocr 被成功执行（能找到 .cmd）；② 参数原样完整传递。
 #[test]
-fn run_ocr_assembles_via_cmd_c() {
+fn run_ocr_finds_ocr_cmd_and_passes_args() {
     let _guard = PATH_LOCK.lock().unwrap();
 
     let mock_dir = std::env::temp_dir().join("ocr_probe_mock_cmdc");
@@ -162,13 +163,13 @@ fn run_ocr_assembles_via_cmd_c() {
     restore_path(&original);
     let _ = std::fs::remove_dir_all(&saved_mock);
 
-    let r = result.expect("应经 cmd 成功执行；若实现改成 Command::new(\"ocr\") 会因找不到 .cmd 而返回 Err");
+    let r = result.expect("应成功 spawn ocr.cmd；若改成 Command::new(\"ocr\")（无扩展名）会找不到而失败");
     assert!(r.ok, "mock 退出 0 时 ok 应为 true；stdout=\n{}", r.stdout);
-    // 直接证据：父进程命令行含 cmd 解释器与 /c 开关，且 ocr 是其执行的命令。
+    // 能找到并执行 ocr.cmd：%CMDCMDLINE% 应含 ocr。
     let lower = r.stdout.to_lowercase();
     assert!(
-        lower.contains("cmd") && lower.contains("/c") && lower.contains("ocr"),
-        "run_ocr 必须经 `cmd /c ocr` 执行（CMDCMDLINE 应含 cmd 与 /c），实际 stdout=\n{}",
+        lower.contains("ocr"),
+        "run_ocr 应能定位并执行 ocr.cmd（CMDLINE 应含 ocr），实际 stdout=\n{}",
         r.stdout
     );
     // 参数应原样拼在 ocr 之后，顺序不变。

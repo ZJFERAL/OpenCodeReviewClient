@@ -1,7 +1,7 @@
 // 集成测试：Params Tab 的 `set_param` 只接受可持久化键（spec §8.2）。
 //
-// mock 方式与 provider_save_test 一致：把 fake `ocr.cmd` 前置到 PATH，让 `cmd /c ocr ...`
-// 命中它，并把收到的 args 回显到 stdout（`ARGS:%*`），从而断言「拼装到 spawn 的键路径正确」。
+// mock 方式与 provider_save_test 一致：把 fake `ocr.cmd` 前置到 PATH，让 `run_ocr`（直接 spawn
+// `ocr.cmd`）命中它，并把收到的 args 回显到 stdout（`ARGS:%*`），从而断言「拼装到 spawn 的键路径正确」。
 // 安全纪律：全程只碰临时 mock 目录，绝不执行/写入用户真实的 `~/.opencodereview/`。
 //
 // 实测结论（隔离 HOME 跑 ocr v1.12.11，spec §8.2）：

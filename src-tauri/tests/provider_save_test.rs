@@ -1,7 +1,7 @@
 // 集成测试：Provider 保存命令的参数拼装 + test_connection 的成败解析 + list_providers 表格解析。
 //
-// mock 方式与 probe_ocr_test 一致：把 fake `ocr.cmd` 前置到 PATH，让 `cmd /c ocr ...`
-// 命中它，并把收到的 args 回显到 stdout（`ARGS:%*`），从而断言「拼装到 spawn 的键路径正确」。
+// mock 方式与 probe_ocr_test 一致：把 fake `ocr.cmd` 前置到 PATH，让 `run_ocr`（直接 spawn
+// `ocr.cmd`）命中它，并把收到的 args 回显到 stdout（`ARGS:%*`），从而断言「拼装到 spawn 的键路径正确」。
 // 安全纪律：全程只碰临时 mock 目录，绝不执行/写入用户真实的 `~/.opencodereview/`。
 
 use std::sync::Mutex;
