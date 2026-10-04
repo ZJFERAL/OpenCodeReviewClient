@@ -15,11 +15,22 @@ export type OcrResult = {
 // 未知关键词回退为原始文本（压缩空白 + 截断），保证信息不丢失。
 // 顺序即优先级：首个命中的模式生效。
 const ERROR_HINTS: ReadonlyArray<readonly [RegExp, string]> = [
-  // Windows cmd 缺失命令报 `is not recognized`，POSIX shell 报 `command not found`，两者同义。
-  [/command not found|is not recognized as an internal or external command/i, "未检测到 ocr"],
+  // Windows cmd 缺失命令报 `is not recognized`，POSIX shell 报 `command not found`，
+  // 中文 Windows cmd 报 `'ocr' 不是内部或外部命令，也不是可运行的程序`，三者同义。
+  [
+    /command not found|is not recognized as an internal or external command|不是内部或外部命令/i,
+    "未检测到 ocr",
+  ],
+  // 兜底：中文 Windows 的 cmd 报错是 GBK 字节，后端 `from_utf8_lossy` 解码后变成
+  // `'ocr' ` + 一连串 U+FFFD 替换字符（既无英文关键词也无正确中文，上面的模式会漏命中）。
+  // 以「被引号括起的命令名 'ocr' 后紧跟替换字符」为信号，不受本机代码页影响；
+  // 用 U+FFFD（而非任意非 ASCII）作判据，避免误伤真正能运行的中文错误输出。
+  [/'ocr'[^\r\n]*\uFFFD/, "未检测到 ocr"],
   [/connection error/i, "LLM 连接失败"],
   [/unknown flag/i, "不支持的参数"],
-  [/unsupported key/i, "该参数不可持久化"],
+  // 真实 CLI 对白名单外的 config 键报 `Error: unknown config key: <key>`（隔离 HOME 实测），
+  // 与本项目后端自造的 `unsupported key` 同义，二者都要映射。
+  [/unknown config key|unsupported key/i, "该参数不可持久化"],
   [/unsupported value/i, "参数值不合法"],
   [/invalid json/i, "JSON 文件损坏（内容不是合法 JSON）"],
   [/not a git repository/i, "该目录不是 git 仓库"],

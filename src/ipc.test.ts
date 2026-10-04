@@ -92,6 +92,27 @@ describe("translateError 错误中文化", () => {
     ).toBe("未检测到 ocr");
   });
 
+  // M1：中文 Windows cmd 的措辞（'ocr' 不是内部或外部命令…）也必须命中。
+  it("中文 Windows cmd 措辞映射为未检测到 ocr", () => {
+    expect(
+      translateError("'ocr' 不是内部或外部命令，也不是可运行的程序\n或批处理文件。")
+    ).toBe("未检测到 ocr");
+  });
+
+  // M1 兜底：中文 cmd 的 stderr 是 GBK 字节，后端 from_utf8_lossy 解码后成了乱码
+  // （'ocr' + U+FFFD 替换字符），既无英文关键词也无正确中文。用真实探针得到的形态断言。
+  it("GBK 乱码形态的中文 cmd 报错同样映射为未检测到 ocr", () => {
+    // 取自真实探针：'ocr' 后接替换字符与残留的 GBK 半字节字符。
+    const mojibake =
+      "'ocr' \uFFFD\uFFFD\uFFFD\uFFFD\uFFFD\u06B2\uFFFD\uFFFD\uFFFD\uFFFD\u2CBF\uFFFD";
+    expect(translateError(mojibake)).toBe("未检测到 ocr");
+  });
+
+  // M2：真实 CLI 对白名单外的 config 键报 `unknown config key`（隔离 HOME 实测）。
+  it("unknown config key → 该参数不可持久化", () => {
+    expect(translateError("Error: unknown config key: timeout")).toBe("该参数不可持久化");
+  });
+
   it("补充关键词：unsupported value / invalid json / not a git repository / 半完成", () => {
     expect(translateError("unsupported value: -1")).toBe("参数值不合法");
     expect(translateError("invalid json in C:/x/config.json: expected value")).toBe(

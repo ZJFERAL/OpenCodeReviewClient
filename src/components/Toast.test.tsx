@@ -68,12 +68,30 @@ describe("useToast / ToastContainer 全局提示", () => {
     expect(container.querySelector(".toast")).toBeNull();
   });
 
-  it("卸载后定时器被清理（不抛错）", () => {
+  it("卸载后定时器被清理（getTimerCount 归零）", () => {
     const { unmount } = render(<Host />);
+    act(() => {
+      api.success("ok");
+      api.error("bad");
+    });
+    // 两条 Toast 各注册一个自动消失定时器。
+    expect(vi.getTimerCount()).toBe(2);
+
+    unmount();
+    // 卸载的 cleanup 必须 clearTimeout 掉全部待触发定时器；
+    // 若清理缺失，fake timers 下这里仍会残留 2 个定时器（旧断言只验「不抛错」抓不到）。
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("手动关闭后其定时器被取消（不残留）", () => {
+    render(<Host />);
     act(() => {
       api.error("bad");
     });
-    unmount();
-    expect(() => act(() => vi.advanceTimersByTime(9000))).not.toThrow();
+    expect(vi.getTimerCount()).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭提示" }));
+    // dismiss 应 clearTimeout 对应定时器，避免「已关闭的 Toast 又触发一次 setState」。
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

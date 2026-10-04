@@ -70,3 +70,40 @@ describe("App 全局 Toast 集成", () => {
     expect(document.querySelector(".toast-container")).not.toBeNull();
   });
 });
+
+// 审查焦点 #1（Task 9 归属）：ocr 未安装时应用必须能开、不崩，并降级为「引导安装」而非白屏。
+describe("App 未安装 ocr 降级", () => {
+  it("probe 失败时应用外壳仍渲染，状态条显示未安装 + 安装引导，三个 Tab 可切换", async () => {
+    vi.mocked(invokeProbe).mockResolvedValue({
+      ok: false,
+      exitCode: 1,
+      stdout: "",
+      stderr: "'ocr' 不是内部或外部命令，也不是可运行的程序",
+    });
+
+    render(<App />);
+
+    // 不白屏：标题与三个 Tab 均在场。
+    expect(screen.getByText("Open Code Review 配置器")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Provider" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rules" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Params" })).toBeInTheDocument();
+
+    // 降级为未安装状态 + 安装引导按钮（而非抛错/崩溃）。
+    await waitFor(() => expect(screen.getByText(/未安装/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "[安装引导]" })).toBeInTheDocument();
+
+    // 未安装状态下仍可切换到其它 Tab（不依赖 ocr 存在）。
+    fireEvent.click(screen.getByRole("button", { name: "Params" }));
+    expect(screen.getByRole("heading", { name: "Params" })).toBeInTheDocument();
+  });
+
+  it("probe 抛错（IPC 异常）时同样降级为未安装，不冒泡为白屏", async () => {
+    vi.mocked(invokeProbe).mockRejectedValue(new Error("ipc unavailable"));
+
+    render(<App />);
+
+    await waitFor(() => expect(screen.getByText(/未安装/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "[安装引导]" })).toBeInTheDocument();
+  });
+});

@@ -133,3 +133,48 @@ fn probe_ok_without_version() {
         version, ocr_result.stdout
     );
 }
+
+// 审查焦点 #5（Task 9 归属）：`run_ocr` 必须经 `cmd /c ocr <args>` 执行，而非 `Command::new("ocr")`。
+// 直接 `Command::new("ocr")` 在本机找不到 `ocr.cmd`（CreateProcess 不解析 .cmd）会 spawn 失败；
+// 即便能找到 .exe，也绕过了 shell 对批处理/内建命令的解析。本用例让 fake `ocr.cmd` 回显
+// `%CMDCMDLINE%`（由 cmd 展开为完整命令行），从而**显式**断言父进程命令行形如
+// `...\cmd.exe /c ocr <args>`——这是「确经 cmd /c 拼装」的直接证据，而非仅靠「能跑通」的间接推断。
+#[test]
+fn run_ocr_assembles_via_cmd_c() {
+    let _guard = PATH_LOCK.lock().unwrap();
+
+    let mock_dir = std::env::temp_dir().join("ocr_probe_mock_cmdc");
+    let _ = std::fs::remove_dir_all(&mock_dir);
+    std::fs::create_dir_all(&mock_dir).expect("create mock dir");
+    // %CMDCMDLINE% = 完整命令行；%* = 参数；%0 = 脚本名（ocr）。
+    let script = concat!(
+        "@echo off\r\n",
+        "echo CMDLINE=%CMDCMDLINE%\r\n",
+        "echo ARGS=%*\r\n",
+        "exit 0\r\n",
+    );
+    std::fs::write(mock_dir.join("ocr.cmd"), script).expect("write fake ocr.cmd");
+
+    let original = push_mock_to_path(&mock_dir);
+
+    let result = app_lib::ocr::run_ocr(&["config", "set", "provider", "openai"]);
+    let saved_mock = mock_dir.clone();
+    restore_path(&original);
+    let _ = std::fs::remove_dir_all(&saved_mock);
+
+    let r = result.expect("应经 cmd 成功执行；若实现改成 Command::new(\"ocr\") 会因找不到 .cmd 而返回 Err");
+    assert!(r.ok, "mock 退出 0 时 ok 应为 true；stdout=\n{}", r.stdout);
+    // 直接证据：父进程命令行含 cmd 解释器与 /c 开关，且 ocr 是其执行的命令。
+    let lower = r.stdout.to_lowercase();
+    assert!(
+        lower.contains("cmd") && lower.contains("/c") && lower.contains("ocr"),
+        "run_ocr 必须经 `cmd /c ocr` 执行（CMDCMDLINE 应含 cmd 与 /c），实际 stdout=\n{}",
+        r.stdout
+    );
+    // 参数应原样拼在 ocr 之后，顺序不变。
+    assert!(
+        r.stdout.contains("ARGS=config set provider openai"),
+        "参数应原样传给 ocr，实际 stdout=\n{}",
+        r.stdout
+    );
+}

@@ -39,5 +39,11 @@ tauri-plugin-dialog = { version = "2", optional = true }
 default = ["tauri", "tauri-plugin-dialog"]
 
 [profile.release]
+# Tauri 官方推荐的 release 配置（体积/性能平衡）。
+# panic=abort：不展开栈，减小体积（GUI 进程无需 catch_unwind）。
+# lto + codegen-units=1：跨 crate 内联，抵消 opt-level="s" 的取舍，整体更小更快。
 panic = "abort"
 opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
