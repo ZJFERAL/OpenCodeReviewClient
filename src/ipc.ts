@@ -140,6 +140,13 @@ export async function invokeSetModel(model: string): Promise<OcrResult> {
   return invoke<OcrResult>("set_model", { model });
 }
 
+// Params Tab：持久化审查参数（仅 max_tokens / effort，spec §4.2 / §8.2）。
+// 后端白名单外的键返回 ok=false 且 stderr 含 `unsupported key`。
+// value 为空串时后端跳过（不覆盖已有值）。
+export async function invokeSetParam(key: string, value: string): Promise<OcrResult> {
+  return invoke<OcrResult>("set_param", { key, value });
+}
+
 // 连接测试：`ocr llm test`，data = { success, message }。
 export async function invokeTestConnection(): Promise<
   OcrResult & { success?: boolean; message?: string }

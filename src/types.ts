@@ -44,5 +44,17 @@ export type RulesFile = {
   rules: Rule[];
 };
 
+// 审查参数（spec §4.2 / §5.4）。
+// 可持久化（经 `ocr config set` 写顶层键）：仅 max_tokens 与 effort。
+// 不可持久化（`ocr review` 运行时 flag）：timeout/concurrency/format/exclude，仅作命令预览。
+export const EFFORT_LEVELS = ["low", "medium", "high"] as const;
+
+export type Effort = (typeof EFFORT_LEVELS)[number];
+
+// `ocr review --format` 的候选值。
+export const REVIEW_FORMATS = ["text", "json", "sarif"] as const;
+
+export type ReviewFormat = (typeof REVIEW_FORMATS)[number];
+
 // Rules Tab 的作用范围：全局 `~/.opencodereview/rule.json` 或仓库级 `<repo>/.opencodereview/rule.json`。
 export type RulesScope = "global" | "repo";

@@ -201,6 +201,47 @@ pub fn set_model(model: &str) -> Result<OcrResult, String> {
     run_ocr(&["config", "set", "model", model])
 }
 
+// Params Tab（spec §4.2 / §8.2）：仅 `max_tokens` / `effort` 可经 `config set` 持久化。
+// 白名单硬编码——隔离 HOME 实测：`timeout`/`concurrency`/`format`/`exclude` 是 `ocr review`
+// 的运行时 flag，`config set` 会报 `unknown config key`；故在此于 spawn 前拒绝，
+// 绝不把非法键下发给真实 CLI（安全纪律 + 不给用户制造误导性报错）。
+pub fn set_param(key: &str, value: &str) -> Result<OcrResult, String> {
+    let v = value.trim();
+    match key {
+        "max_tokens" => {
+            if v.is_empty() {
+                return Ok(skipped_result());
+            }
+            run_ocr(&["config", "set", "max_tokens", v])
+        }
+        "effort" => {
+            if v.is_empty() {
+                return Ok(skipped_result());
+            }
+            if !matches!(v, "low" | "medium" | "high") {
+                return Ok(OcrResult {
+                    ok: false,
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: format!("unsupported value: {v}（effort 只能是 low / medium / high）"),
+                    data: None,
+                });
+            }
+            run_ocr(&["config", "set", "effort", v])
+        }
+        other => Ok(OcrResult {
+            ok: false,
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "unsupported key: {other}（仅 max_tokens / effort 可持久化；\
+                 timeout/concurrency/format/exclude 是 ocr review 运行时 flag，请用命令预览）"
+            ),
+            data: None,
+        }),
+    }
+}
+
 // 判定一行是否为「连接测试成功」的正向标记行。
 // 隔离 HOME 实测：成功 stdout 末段为 `✓ Connection test successful`（✓ = U+2713），
 // 失败则 exit≠0 且 stderr 含 `Error:`。故以退出码为主信号 + 正向标记为辅，避免

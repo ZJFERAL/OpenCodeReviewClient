@@ -24,6 +24,7 @@ pub fn run() {
             commands::set_provider_key,
             commands::set_custom_provider,
             commands::set_model,
+            commands::set_param,
             commands::test_connection,
             commands::list_providers,
             commands::get_rules,

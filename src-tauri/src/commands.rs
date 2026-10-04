@@ -54,6 +54,15 @@ pub fn set_model(model: String) -> Result<OcrResult, String> {
     crate::ocr::set_model(&model)
 }
 
+// Params Tab（spec §4.2）：仅 `max_tokens` / `effort` 可持久化。
+// 白名单外的键返回 ok=false 且 stderr 含 `unsupported key`（由 ocr::set_param 保证），
+// 绝不把不可持久化的键下发给真实 CLI。
+#[cfg(feature = "tauri")]
+#[tauri::command]
+pub fn set_param(key: String, value: String) -> Result<OcrResult, String> {
+    crate::ocr::set_param(&key, &value)
+}
+
 // `test_connection`：跑 `ocr llm test`，data = { success, message }。
 #[cfg(feature = "tauri")]
 #[tauri::command]
