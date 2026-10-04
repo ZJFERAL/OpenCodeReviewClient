@@ -14,7 +14,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::run_ocr,
             commands::probe_ocr,
-            commands::get_config
+            commands::get_config,
+            commands::set_provider,
+            commands::set_provider_key,
+            commands::set_custom_provider,
+            commands::set_model,
+            commands::test_connection,
+            commands::list_providers
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

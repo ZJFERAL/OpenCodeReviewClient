@@ -1,7 +1,124 @@
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import ProviderForm from "./ProviderForm";
+import {
+  invokeSetProvider,
+  invokeSetProviderKey,
+  invokeSetCustomProvider,
+  invokeSetModel,
+  invokeTestConnection,
+} from "../ipc";
+
+// Task 5：保存/测试连接会调用 ipc 命令，这里整体 mock 掉，断言触发参数正确。
+vi.mock("../ipc", () => ({
+  invokeSetProvider: vi.fn(),
+  invokeSetProviderKey: vi.fn(),
+  invokeSetCustomProvider: vi.fn(),
+  invokeSetModel: vi.fn(),
+  invokeTestConnection: vi.fn(),
+}));
+
+const ok = { ok: true, exitCode: 0, stdout: "", stderr: "" };
+const mSetProvider = vi.mocked(invokeSetProvider);
+const mSetProviderKey = vi.mocked(invokeSetProviderKey);
+const mSetCustom = vi.mocked(invokeSetCustomProvider);
+const mSetModel = vi.mocked(invokeSetModel);
+const mTestConn = vi.mocked(invokeTestConnection);
+
+beforeEach(() => {
+  mSetProvider.mockReset().mockResolvedValue(ok);
+  mSetProviderKey.mockReset().mockResolvedValue(ok);
+  mSetCustom.mockReset().mockResolvedValue(ok);
+  mSetModel.mockReset().mockResolvedValue(ok);
+  mTestConn.mockReset();
+});
+
+// 点击保存：按 provider → key → model 顺序逐条 invoke，参数与表单值一致。
+describe("ProviderForm 保存触发", () => {
+  it("内置 provider：保存调用 set_provider / set_provider_key / set_model", async () => {
+    render(<ProviderForm provider="anthropic" />);
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-x" } });
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "claude-x" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mSetModel).toHaveBeenCalled());
+    expect(mSetProvider).toHaveBeenCalledWith("anthropic");
+    expect(mSetProviderKey).toHaveBeenCalledWith("anthropic", "sk-x");
+    expect(mSetModel).toHaveBeenCalledWith("claude-x");
+    // 非 custom 分支不应调用自定义网关命令。
+    expect(mSetCustom).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
+  });
+
+  // 空串 api_key = 「未输入」，不得覆盖已有 key（Task 4 reviewer 语义）。
+  it("api_key 为空串时跳过 set_provider_key", async () => {
+    render(<ProviderForm provider="openai" />);
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "gpt-5" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mSetModel).toHaveBeenCalled());
+    expect(mSetProviderKey).not.toHaveBeenCalled();
+  });
+
+  it("custom 分支：保存调用 set_custom_provider(url/protocol)", async () => {
+    render(
+      <ProviderForm
+        provider="mygw"
+        config={{ customProviders: { mygw: { url: "https://x/v1", protocol: "anthropic" } } }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(mSetCustom).toHaveBeenCalled());
+    expect(mSetCustom).toHaveBeenCalledWith("mygw", "https://x/v1", "anthropic");
+    expect(mSetProvider).toHaveBeenCalledWith("mygw");
+  });
+
+  // 审查焦点 #2：任一 set 失败要定位到具体字段 + 中文提示。
+  it("set_provider_key 失败时显示字段级中文错误提示", async () => {
+    mSetProviderKey.mockResolvedValue({
+      ok: false,
+      exitCode: 1,
+      stdout: "",
+      stderr: "Error: unknown config key: providers.anthropic.api_key",
+    } as typeof ok);
+    render(<ProviderForm provider="anthropic" />);
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-bad" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/保存失败：API Key/)).toBeInTheDocument()
+    );
+    // 失败点之后不再继续调 model。
+    expect(mSetModel).not.toHaveBeenCalled();
+  });
+});
+
+// 测试连接：成功显示 ✓，失败显示 ✗。
+describe("ProviderForm 测试连接", () => {
+  it("成功时显示 ✓", async () => {
+    mTestConn.mockResolvedValue({ ...ok, success: true, message: "pong" });
+    render(<ProviderForm provider="openai" />);
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() => expect(screen.getByText(/✓ 连接成功/)).toBeInTheDocument());
+  });
+
+  it("失败时显示 ✗", async () => {
+    mTestConn.mockResolvedValue({
+      ...ok,
+      ok: false,
+      exitCode: 1,
+      success: false,
+      message: "401 Unauthorized",
+    });
+    render(<ProviderForm provider="openai" />);
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() => expect(screen.getByText(/✗ 连接失败/)).toBeInTheDocument());
+  });
+});
 
 // 核心联动：内置 provider 分支显示 API Key + Model，隐藏自定义网关字段；
 // 自定义分支显示 Gateway/URL/Protocol + API Key，隐藏「内置」专属字段。

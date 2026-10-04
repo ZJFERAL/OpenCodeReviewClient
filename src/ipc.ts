@@ -111,3 +111,65 @@ export async function invokeGetConfig(): Promise<OcrResult & { config?: Provider
   }
   return res;
 }
+
+// ---- Provider 保存（逐条 `ocr config set`，对应 Task 5 的 6 个 command）----
+
+// 切换当前生效的 provider：`ocr config set provider <name>`。
+export async function invokeSetProvider(provider: string): Promise<OcrResult> {
+  return invoke<OcrResult>("set_provider", { provider });
+}
+
+// 写某内置 provider 的 api_key：落盘到 providers.<name>.api_key。
+// key 为空串 = 「未输入」，后端会跳过、不覆盖已有 key。
+export async function invokeSetProviderKey(provider: string, key: string): Promise<OcrResult> {
+  return invoke<OcrResult>("set_provider_key", { provider, key });
+}
+
+// 写自定义网关：custom_providers.<name>.{url,protocol}。
+export async function invokeSetCustomProvider(
+  name: string,
+  url: string,
+  protocol: string
+): Promise<OcrResult> {
+  return invoke<OcrResult>("set_custom_provider", { name, url, protocol });
+}
+
+// 设置当前 model：`ocr config set model <model>`（实测写进 providers/custom_providers 的 model）。
+// model 为空串时后端跳过。
+export async function invokeSetModel(model: string): Promise<OcrResult> {
+  return invoke<OcrResult>("set_model", { model });
+}
+
+// 连接测试：`ocr llm test`，data = { success, message }。
+export async function invokeTestConnection(): Promise<
+  OcrResult & { success?: boolean; message?: string }
+> {
+  const res = await invoke<OcrResult>("test_connection");
+  const d = (res.data && typeof res.data === "object" ? res.data : {}) as Record<string, unknown>;
+  return {
+    ...res,
+    success: typeof d.success === "boolean" ? d.success : undefined,
+    message: typeof d.message === "string" ? d.message : undefined,
+  };
+}
+
+// 内置 provider 列表：`ocr llm providers`，data 为 { name, protocol, baseUrl }[]。
+export type ProviderInfo = { name: string; protocol: string; baseUrl: string };
+
+export async function invokeListProviders(): Promise<OcrResult & { providers?: ProviderInfo[] }> {
+  const res = await invoke<OcrResult>("list_providers");
+  if (!res.ok) return res;
+  const raw = Array.isArray(res.data) ? res.data : [];
+  const providers: ProviderInfo[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const it = item as Record<string, unknown>;
+    if (typeof it.name !== "string" || it.name.length === 0) continue;
+    providers.push({
+      name: it.name,
+      protocol: typeof it.protocol === "string" ? it.protocol : "",
+      baseUrl: typeof it.baseUrl === "string" ? it.baseUrl : "",
+    });
+  }
+  return { ...res, providers };
+}

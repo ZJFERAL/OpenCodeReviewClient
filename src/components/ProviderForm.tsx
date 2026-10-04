@@ -1,5 +1,12 @@
 import { useEffect, useState } from "react";
 import { BUILTIN_PROVIDERS, CUSTOM_PROTOCOLS, type ProviderConfig } from "../types";
+import {
+  invokeSetCustomProvider,
+  invokeSetModel,
+  invokeSetProvider,
+  invokeSetProviderKey,
+  invokeTestConnection,
+} from "../ipc";
 
 // 表单本地值。provider 为当前选中的 provider 名（"custom" 表示自定义网关分支）。
 export type ProviderFormValues = {
@@ -18,7 +25,9 @@ export type ProviderFormProps = {
   provider?: string;
   // 从 get_config 读到的配置，用作表单初值。**异步到达**时表单应随之重新填充。
   config?: ProviderConfig;
-  // 内部字段变化回调（本任务仅展示，Task 5 用于保存）。
+  // 内置 provider 名列表（来自 list_providers）。缺省时回退静态 BUILTIN_PROVIDERS。
+  providers?: string[];
+  // 内部字段变化回调。
   onChange?: (values: ProviderFormValues) => void;
 };
 
@@ -53,8 +62,28 @@ function buildValues(providerProp: string | undefined, config?: ProviderConfig):
   };
 }
 
-export default function ProviderForm({ provider, config, onChange }: ProviderFormProps) {
+// 由当前值计算「实际要写入的 provider 名」：内置直接用名字；自定义分支用 gateway 名。
+function effectiveProvider(values: ProviderFormValues, custom: boolean): string {
+  if (!custom) return values.provider;
+  return values.provider === "custom" ? values.gateway.trim() : values.provider;
+}
+
+// 下拉候选：list_providers 结果（或静态兜底）+ 配置里已有的自定义网关 + 当前值去重。
+function optionsFor(providers: string[] | undefined, config: ProviderConfig | undefined, current: string): string[] {
+  const base = providers && providers.length > 0 ? providers : [...BUILTIN_PROVIDERS];
+  const set = new Set<string>(base);
+  for (const name of Object.keys(config?.customProviders ?? {})) set.add(name);
+  if (current && current !== "custom") set.add(current);
+  return [...set];
+}
+
+export default function ProviderForm({ provider, config, providers, onChange }: ProviderFormProps) {
   const [values, setValues] = useState<ProviderFormValues>(() => buildValues(provider, config));
+  const [status, setStatus] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
+    kind: "idle",
+    text: "",
+  });
+  const [testing, setTesting] = useState(false);
 
   // 当 provider prop 变化，或 config 异步到达/更新时，用新值重填表单。
   // 这是关键：ProviderTab 首次渲染时 config 为 undefined，useEffect 异步拿到后
@@ -73,8 +102,86 @@ export default function ProviderForm({ provider, config, onChange }: ProviderFor
     });
   };
 
+  // 保存：按表单状态逐条下发 `ocr config set`。顺序 = provider → (key / 自定义网关字段) → model。
+  // 任一失败即中止并给出「字段名 + 中文说明 + ocr 输出」的提示（审查焦点 #2）。
+  const handleSave = async () => {
+    setStatus({ kind: "idle", text: "" });
+    const name = effectiveProvider(values, custom);
+
+    if (custom && name.length === 0) {
+      setStatus({ kind: "error", text: "保存失败：Gateway 名称（请填写自定义网关名称）" });
+      return;
+    }
+
+    // 逐条保存；某条失败时抛出带「字段名」的错误，由下方统一转成中文提示。
+    const step = async (
+      field: string,
+      run: () => Promise<{ ok: boolean; stderr: string; stdout: string }>
+    ) => {
+      const res = await run();
+      if (!res.ok) {
+        const detail = (res.stderr || res.stdout).trim().replace(/\s+/g, " ");
+        throw new Error(`${field}｜${detail}`);
+      }
+    };
+
+    try {
+      await step("Provider 名称", () => invokeSetProvider(name));
+      if (custom) {
+        await step("路由 URL / Protocol", () =>
+          invokeSetCustomProvider(name, values.url, values.protocol)
+        );
+      }
+      // api_key 空串 = 「未输入」，不写入（不覆盖已有 key，Task 4 reviewer 语义）。
+      if (values.apiKey.length > 0) {
+        await step("API Key", () => invokeSetProviderKey(name, values.apiKey));
+      }
+      // model 空串 = 不写入。
+      if (values.model.length > 0) {
+        await step("Model", () => invokeSetModel(values.model));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const [field, detail] = msg.split("｜");
+      setStatus({
+        kind: "error",
+        text: detail
+          ? `保存失败：${field} 写入出错（${detail}）`
+          : `保存失败：${field}`,
+      });
+      return;
+    }
+
+    setStatus({ kind: "ok", text: "已保存" });
+  };
+
+  // 测试连接：调 `test_connection`，展示 ✓/✗。
+  const handleTest = async () => {
+    setTesting(true);
+    setStatus({ kind: "idle", text: "" });
+    try {
+      const res = await invokeTestConnection();
+      if (res.success) {
+        setStatus({ kind: "ok", text: `✓ 连接成功${res.message ? "：" + res.message : ""}` });
+      } else {
+        const detail = res.message || res.stderr || res.stdout || "未知错误";
+        setStatus({ kind: "error", text: `✗ 连接失败：${detail.trim()}` });
+      }
+    } catch (e) {
+      setStatus({ kind: "error", text: `✗ 连接失败：${String(e)}` });
+    } finally {
+      setTesting(false);
+    }
+  };
+
   return (
-    <form className="provider-form" onSubmit={(e) => e.preventDefault()}>
+    <form
+      className="provider-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void handleSave();
+      }}
+    >
       <label htmlFor="provider-select">Provider</label>
       <select
         id="provider-select"
@@ -86,7 +193,7 @@ export default function ProviderForm({ provider, config, onChange }: ProviderFor
           setValues(next);
         }}
       >
-        {BUILTIN_PROVIDERS.map((p) => (
+        {optionsFor(providers, config, values.provider).map((p) => (
           <option key={p} value={p}>
             {p}
           </option>
@@ -173,6 +280,17 @@ export default function ProviderForm({ provider, config, onChange }: ProviderFor
         <option value="medium">medium</option>
         <option value="high">high</option>
       </select>
+
+      <div className="provider-actions">
+        <button type="submit">保存</button>
+        <button type="button" onClick={() => void handleTest()} disabled={testing}>
+          {testing ? "测试中…" : "测试连接"}
+        </button>
+      </div>
+
+      {status.kind !== "idle" && (
+        <p className={status.kind === "ok" ? "status-ok" : "error"}>{status.text}</p>
+      )}
     </form>
   );
 }

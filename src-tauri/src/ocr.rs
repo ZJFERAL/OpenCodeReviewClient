@@ -123,6 +123,147 @@ pub fn config_path() -> PathBuf {
     }
 }
 
+// 「无需执行 ocr」的成功结果：用于空串语义下的跳过分支（model / api_key 为空 = 不写入）。
+// 绝不 spawn ocr，从而不会覆盖用户已有的 key。data.skipped = true 供前端识别。
+fn skipped_result() -> OcrResult {
+    OcrResult {
+        ok: true,
+        exit_code: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        data: Some(serde_json::json!({ "skipped": true })),
+    }
+}
+
+// `config set provider <name>`：切换当前生效的 provider。
+pub fn set_provider(provider: &str) -> Result<OcrResult, String> {
+    run_ocr(&["config", "set", "provider", provider])
+}
+
+// `config set providers.<provider>.api_key <key>`：写入某内置 provider 的 key。
+// 实测键路径（隔离 HOME）：真实 config.json 里 key 落在 providers.<name>.api_key。
+// 空串 key = 「未输入」，跳过、不覆盖已存在的 key（Task 4 reviewer 明确）。
+pub fn set_provider_key(provider: &str, key: &str) -> Result<OcrResult, String> {
+    if key.is_empty() {
+        return Ok(skipped_result());
+    }
+    let path = format!("providers.{provider}.api_key");
+    run_ocr(&["config", "set", &path, key])
+}
+
+// 写入自定义网关：`custom_providers.<name>.{url,protocol}`（实测落盘位置）。
+// 任一字段失败即返回该失败结果，并把字段名标注进 stderr 便于 UI 定位（审查焦点 #2）。
+// 两条命令的 stdout/stderr 合并，便于调用方/测试一次看到全部下发内容。
+pub fn set_custom_provider(name: &str, url: &str, protocol: &str) -> Result<OcrResult, String> {
+    let fields = [
+        (format!("custom_providers.{name}.url"), url),
+        (format!("custom_providers.{name}.protocol"), protocol),
+    ];
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut exit_code = 0;
+    for (path, value) in fields {
+        let r = run_ocr(&["config", "set", &path, value])?;
+        stdout.push_str(&r.stdout);
+        if !r.ok {
+            stderr.push_str(&format!("{path}: {}\n", r.stderr.trim()));
+            return Ok(OcrResult {
+                ok: false,
+                exit_code: r.exit_code,
+                stdout,
+                stderr,
+                data: None,
+            });
+        }
+        exit_code = r.exit_code;
+    }
+    Ok(OcrResult {
+        ok: true,
+        exit_code,
+        stdout,
+        stderr,
+        data: None,
+    })
+}
+
+// `config set model <model>`：设置当前生效的 model。
+// 实测：设过 provider 后，该命令会写进 providers.<name>.model 或 custom_providers.<name>.model。
+// 空串 = 「不写入」，跳过（不触发 ocr）。
+pub fn set_model(model: &str) -> Result<OcrResult, String> {
+    if model.is_empty() {
+        return Ok(skipped_result());
+    }
+    run_ocr(&["config", "set", "model", model])
+}
+
+// `llm test`：向当前配置的 LLM 发一条测试对话。
+// success 判定：退出码 0 且输出不含 error 关键词（成功时 stdout 含
+// `✓ Connection test successful`；失败时退出非 0、stderr 含 `Error:`）。
+// data = { success: bool, message: String }。
+pub fn test_connection() -> Result<OcrResult, String> {
+    let mut r = run_ocr(&["llm", "test"])?;
+    let mut lower = r.stdout.to_lowercase();
+    lower.push_str(&r.stderr.to_lowercase());
+    let success = r.ok && !lower.contains("error");
+    let message = if success {
+        r.stdout
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        let err = r.stderr.trim();
+        if err.is_empty() {
+            r.stdout.trim().to_string()
+        } else {
+            err.to_string()
+        }
+    };
+    r.data = Some(serde_json::json!({ "success": success, "message": message }));
+    Ok(r)
+}
+
+// 解析 `ocr llm providers` 的表格：跳过标题/表头/分隔行与尾部图例行，按列取
+// name / protocol / baseUrl。判定「数据行」的规则：首列是合法 provider 名
+// （全小写字母/数字/连字符且含至少一个字母数字），于是 `NAME`/`----`/`Use ...`/
+// `Built-in providers:` 这些行自然被排除。缺列（如 bedrock 无 Base URL）归一为空串。
+pub fn parse_providers_table(stdout: &str) -> Vec<serde_json::Value> {
+    let mut rows = Vec::new();
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let mut cols = trimmed.split_whitespace();
+        let Some(name) = cols.next() else { continue };
+        let is_provider_name = name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            && name.chars().any(|c| c.is_ascii_alphanumeric());
+        if !is_provider_name {
+            continue;
+        }
+        let protocol = cols.next().unwrap_or("");
+        let base_url = cols.next().unwrap_or("");
+        rows.push(serde_json::json!({
+            "name": name,
+            "protocol": protocol,
+            "baseUrl": base_url,
+        }));
+    }
+    rows
+}
+
+// `list_providers`：跑 `ocr llm providers`，成功时把解析后的表格放进 data（数组）。
+pub fn list_providers() -> Result<OcrResult, String> {
+    let mut r = run_ocr(&["llm", "providers"])?;
+    if r.ok {
+        r.data = Some(serde_json::Value::Array(parse_providers_table(&r.stdout)));
+    }
+    Ok(r)
+}
+
 // 从指定路径读配置 JSON。
 // - 文件不存在 → 空对象 `{}`（spec §4.3 同类「缺失即空」处理）
 // - 内容非法 → `Err`，消息含 `invalid json`（供 UI 提示，不 panic）

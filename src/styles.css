@@ -141,3 +141,33 @@ body,
 .error {
   color: var(--fail);
 }
+
+.status-ok {
+  color: var(--ok);
+}
+
+.provider-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.provider-actions button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 14px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.provider-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.provider-actions button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
