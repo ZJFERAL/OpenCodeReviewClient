@@ -36,13 +36,48 @@ describe("ProviderForm 字段联动", () => {
     expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
   });
 
-  it("config.customProviders 中包含的名字也走自定义分支", () => {
+  // Minor-3：非 "custom" 的名字，只要存在于 custom_providers 中，也应识别为自定义分支。
+  it("custom_providers 中的名字（非字面 custom）走自定义分支", () => {
     render(
       <ProviderForm
-        provider="custom"
+        provider="mygw"
         config={{ customProviders: { mygw: { url: "https://x", protocol: "openai" } } }}
       />
     );
     expect(screen.getByLabelText("Gateway 名称")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Protocol")).toBeInTheDocument();
+  });
+});
+
+// Important-2：初值预填——从 config 正确初始化 model / gateway / url / protocol / max_tokens / effort。
+describe("ProviderForm 初值预填", () => {
+  it("内置 provider：从 providers.<name>.model 预填 Model", () => {
+    render(
+      <ProviderForm
+        provider="openai"
+        config={{ providers: { openai: { apiKey: "", model: "gpt-5" } } }}
+      />
+    );
+    expect((screen.getByLabelText("Model") as HTMLInputElement).value).toBe("gpt-5");
+  });
+
+  it("custom 网关：预填 gateway 名称 / url / protocol", () => {
+    render(
+      <ProviderForm
+        provider="mygw"
+        config={{
+          customProviders: { mygw: { url: "https://api.example/v1", protocol: "anthropic" } },
+        }}
+      />
+    );
+    expect((screen.getByLabelText("Gateway 名称") as HTMLInputElement).value).toBe("mygw");
+    expect((screen.getByLabelText("URL") as HTMLInputElement).value).toBe("https://api.example/v1");
+    expect((screen.getByLabelText("Protocol") as HTMLSelectElement).value).toBe("anthropic");
+  });
+
+  it("max_tokens 与 effort 被预填", () => {
+    render(<ProviderForm provider="openai" config={{ maxTokens: 8192, effort: "high" }} />);
+    expect((screen.getByLabelText("Max Tokens") as HTMLInputElement).value).toBe("8192");
+    expect((screen.getByLabelText("Effort") as HTMLSelectElement).value).toBe("high");
   });
 });

@@ -2,8 +2,8 @@
 // 注意：JSON 里的键名以真实文件为准（snake_case：api_key / custom_providers），
 // 但前端惯用 camelCase，故 ProviderConfig 用 camelCase 字段，由 ipc 层的解析函数
 // 从真实键名映射过来（见 src/ipc.ts 的 normalizeConfig）。
-export type ProviderEntry = { apiKey?: string };
-export type CustomProviderEntry = { url?: string; protocol?: string };
+export type ProviderEntry = { apiKey?: string; model?: string };
+export type CustomProviderEntry = { url?: string; protocol?: string; model?: string };
 
 export type ProviderConfig = {
   provider?: string;

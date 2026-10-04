@@ -9,12 +9,14 @@ export type ProviderFormValues = {
   gateway: string;
   url: string;
   protocol: string;
+  maxTokens: string;
+  effort: string;
 };
 
 export type ProviderFormProps = {
   // 初始 / 受控选中的 provider（"anthropic" 等内置名，或 "custom"）。
   provider?: string;
-  // 从 get_config 读到的配置，用作表单初值。
+  // 从 get_config 读到的配置，用作表单初值。**异步到达**时表单应随之重新填充。
   config?: ProviderConfig;
   // 内部字段变化回调（本任务仅展示，Task 5 用于保存）。
   onChange?: (values: ProviderFormValues) => void;
@@ -26,22 +28,40 @@ function isCustom(provider: string, config?: ProviderConfig): boolean {
   return !!config?.customProviders && provider in config.customProviders;
 }
 
-export default function ProviderForm({ provider, config, onChange }: ProviderFormProps) {
-  const [values, setValues] = useState<ProviderFormValues>(() => ({
-    provider: provider ?? config?.provider ?? "anthropic",
+// 由 props/config 计算一组表单初值。config 未就绪（undefined）时给出可用的空占位，
+// config 到达后调用方会再次调用本函数重填（解决异步填充，Critical-1）。
+function buildValues(providerProp: string | undefined, config?: ProviderConfig): ProviderFormValues {
+  const provider = providerProp ?? config?.provider ?? "anthropic";
+  const custom = isCustom(provider, config);
+  const customEntry = config?.customProviders?.[provider];
+  const providerEntry = config?.providers?.[provider];
+  // model 兜底顺序与 config.json 真实 schema 一致：
+  // providers[name].model → custom_providers[name].model → 顶层 config.model。
+  const model = providerEntry?.model ?? customEntry?.model ?? config?.model ?? "";
+
+  return {
+    provider,
     // api_key 明文永不回读（spec §7），初值恒为空串占位。
     apiKey: "",
-    model: config?.model ?? "",
-    gateway: "",
-    url: "",
-    protocol: CUSTOM_PROTOCOLS[0],
-  }));
+    model,
+    // custom 分支：gateway = 网关名，url/protocol 取该网关条目。
+    gateway: custom && provider !== "custom" ? provider : "",
+    url: customEntry?.url ?? "",
+    protocol: customEntry?.protocol ?? CUSTOM_PROTOCOLS[0],
+    maxTokens: config?.maxTokens !== undefined ? String(config.maxTokens) : "",
+    effort: config?.effort ?? "",
+  };
+}
 
-  // 外部 provider prop 变化时同步选中项（使 <ProviderForm provider="custom"/> 切换生效）。
+export default function ProviderForm({ provider, config, onChange }: ProviderFormProps) {
+  const [values, setValues] = useState<ProviderFormValues>(() => buildValues(provider, config));
+
+  // 当 provider prop 变化，或 config 异步到达/更新时，用新值重填表单。
+  // 这是关键：ProviderTab 首次渲染时 config 为 undefined，useEffect 异步拿到后
+  // setConfig 会改变 config 引用，此处据此重置，避免「表单永不填充」。
   useEffect(() => {
-    if (provider === undefined) return;
-    setValues((v) => (v.provider === provider ? v : { ...v, provider }));
-  }, [provider]);
+    setValues(buildValues(provider, config));
+  }, [provider, config]);
 
   const custom = isCustom(values.provider, config);
 
@@ -59,7 +79,12 @@ export default function ProviderForm({ provider, config, onChange }: ProviderFor
       <select
         id="provider-select"
         value={values.provider}
-        onChange={(e) => update({ provider: e.target.value })}
+        onChange={(e) => {
+          // 切换 provider 时按新 provider 重置预填值（模型/自定义网关字段随之更新）。
+          const next = buildValues(e.target.value, config);
+          onChange?.(next);
+          setValues(next);
+        }}
       >
         {BUILTIN_PROVIDERS.map((p) => (
           <option key={p} value={p}>
@@ -127,6 +152,27 @@ export default function ProviderForm({ provider, config, onChange }: ProviderFor
         value={values.model}
         onChange={(e) => update({ model: e.target.value })}
       />
+
+      <label htmlFor="provider-max-tokens">Max Tokens</label>
+      <input
+        id="provider-max-tokens"
+        name="provider-max-tokens"
+        value={values.maxTokens}
+        onChange={(e) => update({ maxTokens: e.target.value })}
+      />
+
+      <label htmlFor="provider-effort">Effort</label>
+      <select
+        id="provider-effort"
+        name="provider-effort"
+        value={values.effort}
+        onChange={(e) => update({ effort: e.target.value })}
+      >
+        <option value="">（默认）</option>
+        <option value="low">low</option>
+        <option value="medium">medium</option>
+        <option value="high">high</option>
+      </select>
     </form>
   );
 }
