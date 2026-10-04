@@ -95,12 +95,13 @@ pub fn parse_version(stdout: &str) -> Option<String> {
 }
 
 // 探测 ocr 是否可用并解析版本号。
-// 复用 `run_ocr(&["--version"])`，成功（exit 0）时把解析出的版本写入 `data: { version }`，
-// 否则 `data` 留空。返回 `Result<OcrResult, String>`，与 `run_ocr` 一致，便于 command 层透传。
+// 复用 `run_ocr(&["--version"])`，成功（exit 0）时把版本写入 `data: { version }`；
+// 版本解析失败（stdout 无 vX.Y.Z）时以空串 "" 归一，保证契约里 `version` 恒为 String，
+// 绝不序列化为 JSON null。否则（exit≠0）`data` 留空。返回 `Result<OcrResult, String>`。
 pub fn probe_ocr() -> Result<OcrResult, String> {
     let mut r = run_ocr(&["--version"])?;
     if r.ok {
-        r.data = Some(serde_json::json!({ "version": parse_version(&r.stdout) }));
+        r.data = Some(serde_json::json!({ "version": parse_version(&r.stdout).unwrap_or_default() }));
     }
     Ok(r)
 }
