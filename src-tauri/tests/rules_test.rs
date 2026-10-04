@@ -212,6 +212,60 @@ fn set_rules_valid_writes_and_roundtrips() {
     assert_eq!(arr[0].get("mergeSystemRule").and_then(|v| v.as_bool()), Some(true));
 }
 
+// I1：覆盖已存在的 rule.json 必须成功（rename 原子覆盖，而非「删除→rename」两步）。
+// 修复前实现会先 remove_file 旧文件再 rename，若 rename 失败则原文件已丢；本测试锁定
+// 「直接 rename 覆盖已存在目标」这一行为，并验证新旧内容替换正确、无临时文件残留。
+#[test]
+fn set_rules_overwrites_existing_file() {
+    let (dir, path) = mock_rules_path("overwrite");
+    let repo = dir.to_string_lossy().to_string();
+
+    // 先写旧内容（含两条规则）。
+    let old = serde_json::json!({
+        "rules": [
+            { "path": "**/*.java", "rule": "旧规则一", "mergeSystemRule": true },
+            { "path": "**/*.py", "rule": "旧规则二", "mergeSystemRule": false }
+        ]
+    });
+    let first = app_lib::ocr::set_rules_result("repo", Some(&repo), &old);
+    assert!(first.ok, "首次写入应成功；stderr={}", first.stderr);
+    assert!(path.exists(), "旧文件应已存在");
+
+    // 覆盖为新内容（一条规则）。
+    let new = serde_json::json!({
+        "rules": [{ "path": "**/*.ts", "rule": "新规则", "mergeSystemRule": false }]
+    });
+    let second = app_lib::ocr::set_rules_result("repo", Some(&repo), &new);
+    assert!(
+        second.ok,
+        "覆盖已存在文件应成功（rename 原子覆盖）；stderr={}",
+        second.stderr
+    );
+
+    // 内容应为新规则，旧内容不再出现。
+    let text = std::fs::read_to_string(&path).expect("read overwritten rule.json");
+    assert!(text.contains("新规则"), "应写入新内容，实际：{text}");
+    assert!(!text.contains("旧规则一"), "旧内容应被完全替换，实际：{text}");
+
+    // 无残留临时文件。
+    let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().contains(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "覆盖后不应残留临时文件，实际 {:?}", leftovers);
+
+    // 回读应得到新内容单条规则。
+    let read = app_lib::ocr::read_rules_result_at(&path);
+    cleanup(&dir);
+    assert!(read.ok);
+    let data = read.data.expect("应有 data");
+    let arr = data.get("rules").and_then(|v| v.as_array()).expect("rules 数组");
+    assert_eq!(arr.len(), 1, "覆盖后应只剩 1 条规则，实际 {:?}", arr);
+    assert_eq!(arr[0].get("path").and_then(|v| v.as_str()), Some("**/*.ts"));
+    assert_eq!(arr[0].get("mergeSystemRule").and_then(|v| v.as_bool()), Some(false));
+}
+
 // 缺 rules 字段 → 校验失败（不 panic），并给出中文提示。
 #[test]
 fn set_rules_missing_rules_field_fails() {
@@ -251,8 +305,10 @@ fn rules_path_for_global_is_under_opencodereview() {
 // ---- check_rules：经 mock ocr 验证参数拼装与 data 语义 ----
 
 fn write_fake_ocr(mock_dir: &Path) {
+    // 把收到的参数回显到 stdout，便于断言拼装出的 --repo 值。
     let script = concat!(
         "@echo off\r\n",
+        "echo ARGS:%*\r\n",
         "echo Source: Project (.opencodereview/rule.json)\r\n",
         "echo Pattern: **/*.java\r\n",
         "echo Rule:\r\n",
@@ -287,4 +343,78 @@ fn check_rules_builds_args_and_returns_text() {
         "data 应为命中规则文本"
     );
     assert!(r.stdout.contains("MATCHED-CUSTOM-RULE"));
+    // 显式 repo 应原样拼进 `--repo`。
+    assert!(
+        r.stdout.contains("--repo F:/repo"),
+        "应把显式 repo 拼进 --repo，实际 stdout=\n{}",
+        r.stdout
+    );
+}
+
+// I2：global 作用范围（未显式传 repo）时，应由文件路径向上回溯 git root 作为 --repo，
+// 避免 CLI 用 GUI 进程 cwd（非 git 仓库）定位而报 `... is not a git repository`。
+#[test]
+fn check_rules_backtracks_git_root_when_repo_absent() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mock = std::env::temp_dir().join(format!("ocr_rules_gitroot_mock_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&mock);
+    std::fs::create_dir_all(&mock).expect("create mock dir");
+    write_fake_ocr(&mock);
+
+    // 造一个「git 仓库」：<root>/.git/ 与深层子目录 <root>/a/b/Foo.java。
+    let root = std::env::temp_dir().join(format!("ocr_rules_gitroot_repo_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".git")).expect("create .git");
+    let deep = root.join("a").join("b");
+    std::fs::create_dir_all(&deep).expect("create deep dir");
+    let file = deep.join("Foo.java");
+
+    let original = std::env::var("PATH").unwrap_or_default();
+    std::env::set_var("PATH", format!("{};{}", mock.display(), original));
+
+    let result = app_lib::ocr::check_rules_result(file.to_string_lossy().as_ref(), None);
+
+    std::env::set_var("PATH", original);
+    let _ = std::fs::remove_dir_all(&mock);
+    let _ = std::fs::remove_dir_all(&root);
+
+    let r = result.expect("应执行成功返回");
+    assert!(r.ok, "ok 应为 true；stderr={}", r.stderr);
+    assert!(
+        r.stdout.contains(&format!("--repo {}", root.display())),
+        "应回溯到 git root 作为 --repo，期望含 `--repo {}`，实际 stdout=\n{}",
+        root.display(),
+        r.stdout
+    );
+}
+
+// I2：文件不在任何 git 仓库内且未指定 repo → 清晰中文提示（不让 CLI 抛 cwd 错误）。
+#[test]
+fn check_rules_outside_git_repo_gives_clear_message() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // 造一个不含 .git 的孤立目录。temp_dir 本身可能位于某仓库内，故显式多套一层且不建 .git；
+    // 用系统临时目录下随机名，向上回溯直到盘根都不应有 .git（真实 ~/.opencodereview 与项目仓库均不在此链上）。
+    let outside = std::env::temp_dir().join(format!("ocr_rules_nogit_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&outside);
+    std::fs::create_dir_all(&outside).expect("create dir");
+    let file = outside.join("Loose.java");
+    std::fs::write(&file, "class Loose {}").expect("write file");
+
+    // 若临时目录链上真存在 .git（环境差异），本用例跳过断言外的情况。
+    let has_git_ancestor = app_lib::ocr::find_git_root(file.to_string_lossy().as_ref()).is_some();
+    if has_git_ancestor {
+        let _ = std::fs::remove_dir_all(&outside);
+        return;
+    }
+
+    let result = app_lib::ocr::check_rules_result(file.to_string_lossy().as_ref(), None);
+    let _ = std::fs::remove_dir_all(&outside);
+
+    let r = result.expect("不应因找不到仓库而 panic/Err");
+    assert!(!r.ok, "不在 git 仓库内时应返回 ok=false");
+    assert!(
+        r.stderr.contains("git 仓库"),
+        "应给出清晰中文提示，实际 stderr={}",
+        r.stderr
+    );
 }

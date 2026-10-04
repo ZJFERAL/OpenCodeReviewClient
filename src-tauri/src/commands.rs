@@ -86,7 +86,9 @@ pub fn set_rules(scope: String, repo_path: Option<String>, rules: serde_json::Va
     crate::ocr::set_rules_result(&scope, repo_path.as_deref(), &rules)
 }
 
-// 验证某文件命中的规则：`ocr rules check <file> [--repo <repo>]`，data 为命中规则文本。
+// 验证某文件命中的规则：`ocr rules check <file> --repo <root>`，data 为命中规则文本。
+// repo 省略时由 ocr::check_rules_result 从 file 向上回溯 git root（global 场景），
+// 避免 CLI 用 GUI 进程 cwd 定位仓库而失败；文件不在 git 仓库内则给出清晰中文提示。
 #[cfg(feature = "tauri")]
 #[tauri::command]
 pub fn check_rules(file: String, repo: Option<String>) -> Result<OcrResult, String> {

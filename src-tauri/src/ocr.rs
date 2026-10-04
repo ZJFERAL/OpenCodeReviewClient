@@ -500,10 +500,10 @@ pub fn write_rules_at(path: &Path, rules: &serde_json::Value) -> Result<(), Stri
     let tmp = path.with_extension(format!("json.tmp{}", std::process::id()));
     std::fs::write(&tmp, text.as_bytes())
         .map_err(|e| format!("无法写入临时文件 {}：{e}", tmp.display()))?;
-    // Windows 上 rename 到已存在目标会失败，先移除旧文件再 rename（同目录、尽量小窗口）。
-    if path.exists() {
-        let _ = std::fs::remove_file(path);
-    }
+    // 原子写：同目录临时文件 + rename 覆盖。
+    // Rust 的 fs::rename 在 Windows 上走 MoveFileExW(MOVEFILE_REPLACE_EXISTING)，
+    // 可直接原子覆盖已存在的目标文件（实测返回 OK），故无需先删除旧文件——
+    // 「删除→rename」两步反而会露出「删除成功、rename 前崩溃 → 原文件丢失」的窗口。
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         format!("无法写回 {}：{e}", path.display())
@@ -552,15 +552,57 @@ pub fn set_rules_result(scope: &str, repo_path: Option<&str>, rules: &serde_json
     }
 }
 
+// 从文件路径向上回溯，找最近的包含 `.git` 的目录（git 仓库根）。
+// I2：`ocr rules check <file>` 无 `--repo` 时以 **cwd** 定位仓库；GUI 进程 cwd
+//（安装目录/target）通常不是 git 仓库 → CLI 报 `... is not a git repository`。
+// 故这里显式回溯出 file 所属仓库根，回传为 `--repo`。找不到 git 根返回 None。
+pub fn find_git_root(file: &str) -> Option<PathBuf> {
+    let p = Path::new(file);
+    // 从文件所在目录（或把 file 当目录）开始向上找。
+    let mut cur = if p.is_dir() {
+        Some(p.to_path_buf())
+    } else {
+        p.parent().map(Path::to_path_buf)
+    };
+    while let Some(dir) = cur {
+        if dir.join(".git").exists() {
+            return Some(dir);
+        }
+        cur = dir.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
 // `check_rules(file, repo?)`：调 `ocr rules check <file> [--repo <repo>]`，
 // 成功时把命中规则文本放进 data。
+//
+// repo 解析顺序（I2）：
+//   1. 调用方显式传入的非空 repo → 直接用（仓库级作用范围选定的目录）；
+//   2. 否则由 file 向上回溯 git root → 用其作 `--repo`（global 作用范围的自动定位）；
+//   3. 两者都无（文件不在 git 仓库内）→ 不传 `--repo`，但仍会以 cwd 定位而失败，
+//      故此处直接返回带清晰中文提示的失败结果，不让 CLI 抛出 cwd 错误。
 pub fn check_rules_result(file: &str, repo: Option<&str>) -> Result<OcrResult, String> {
-    let mut args: Vec<&str> = vec!["rules", "check", file];
-    if let Some(r) = repo.map(str::trim).filter(|s| !s.is_empty()) {
-        args.push("--repo");
-        args.push(r);
-    }
-    let mut r = run_ocr(&args)?;
+    let explicit = repo.map(str::trim).filter(|s| !s.is_empty());
+    let effective: Option<PathBuf> = match explicit {
+        Some(r) => Some(PathBuf::from(r)),
+        None => find_git_root(file),
+    };
+
+    let Some(root) = effective else {
+        return Ok(OcrResult {
+            ok: false,
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: format!(
+                "无法定位 git 仓库：文件 `{file}` 不在任何 git 仓库内，且未指定仓库目录。\n\
+                 请把文件放入 git 仓库，或先选择仓库目录后再验证。"
+            ),
+            data: None,
+        });
+    };
+
+    let root_str = root.to_string_lossy().to_string();
+    let mut r = run_ocr(&["rules", "check", file, "--repo", root_str.as_str()])?;
     if r.ok {
         r.data = Some(serde_json::Value::String(r.stdout.clone()));
     }

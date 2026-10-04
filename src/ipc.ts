@@ -223,6 +223,9 @@ export async function invokeSetRules(
 
 // 验证某文件命中的规则，对应 Rust 的 `check_rules` command（`ocr rules check <file>`）。
 // 成功时 data 为命中规则文本。
+// repoPath 语义（I2）：省略 = 由后端从 file 向上回溯 git root 作为 `--repo`
+//（global 作用范围）；传入则直接用（仓库级作用范围选定的目录）。CLI 无 `--repo` 时
+// 以 cwd 定位仓库，而 GUI 进程 cwd 常非 git 仓库，故不在前端省略为「让 CLI 自己找」。
 export async function invokeCheckRules(
   file: string,
   repoPath?: string

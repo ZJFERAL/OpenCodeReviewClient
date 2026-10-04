@@ -111,4 +111,45 @@ describe("RulesTab 验证命中", () => {
     await waitFor(() => expect(screen.getByText(/MATCHED/)).toBeInTheDocument());
     expect(mCheck).toHaveBeenCalledWith("F:/repo/src/Foo.java", undefined);
   });
+
+  // I2：global 作用范围下不传 repo（undefined）——由后端 Rust 自动回溯所选文件的 git root
+  // 作为 `--repo`，避免 CLI 用 GUI 进程 cwd 定位而报 `... is not a git repository`。
+  it("global 作用范围验证时 repo 传 undefined（交后端回溯 git root）", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("F:/some/git/repo/src/Foo.java");
+    mCheck.mockResolvedValue({ ...ok, matched: "Rule:\n  MATCHED" });
+
+    render(<RulesTab />);
+    await flushLoad();
+    fireEvent.click(screen.getByRole("button", { name: "选择文件…" }));
+    await waitFor(() =>
+      expect(screen.getByText("F:/some/git/repo/src/Foo.java")).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole("button", { name: "用 ocr rules check 验证" }));
+
+    await waitFor(() => expect(mCheck).toHaveBeenCalled());
+    expect(mCheck).toHaveBeenCalledWith("F:/some/git/repo/src/Foo.java", undefined);
+  });
+
+  // I2：repo 作用范围下应把选定的仓库目录作为 repo 参数传入。
+  it("repo 作用范围验证时传入选定仓库目录", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    // 第一次 open 用于选目录（切 repo 作用范围），第二次用于选文件。
+    vi.mocked(open)
+      .mockResolvedValueOnce("F:/myrepo")
+      .mockResolvedValueOnce("F:/myrepo/src/Bar.java");
+    mCheck.mockResolvedValue({ ...ok, matched: "Rule:\n  MATCHED" });
+
+    render(<RulesTab />);
+    await flushLoad();
+    fireEvent.click(screen.getByLabelText(/仓库级/));
+    await waitFor(() => expect(mGet).toHaveBeenCalledWith("repo", "F:/myrepo"));
+
+    fireEvent.click(screen.getByRole("button", { name: "选择文件…" }));
+    await waitFor(() => expect(screen.getByText("F:/myrepo/src/Bar.java")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "用 ocr rules check 验证" }));
+
+    await waitFor(() => expect(mCheck).toHaveBeenCalled());
+    expect(mCheck).toHaveBeenCalledWith("F:/myrepo/src/Bar.java", "F:/myrepo");
+  });
 });
