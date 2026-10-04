@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import RulesTable from "../components/RulesTable";
-import { invokeCheckRules, invokeGetRules, invokeSetRules } from "../ipc";
+import type { ToastApi } from "../components/Toast";
+import { invokeCheckRules, invokeGetRules, invokeSetRules, translateError } from "../ipc";
 import type { Rule, RulesFile, RulesScope } from "../types";
 
 // Rules Tab（spec §5.3）：
@@ -9,8 +10,7 @@ import type { Rule, RulesFile, RulesScope } from "../types";
 // - 规则表格：行内编辑 path / rule / merge 开关，增删
 // - 「保存规则文件」→ set_rules（写前校验，失败定位到行）
 // - 「验证命中」→ 选文件 → check_rules → 展示命中规则
-
-type Status = { kind: "idle" | "ok" | "error"; text: string };
+// 保存/重置/验证结果经全局 Toast 上报；命中规则文本仍就地展示。
 
 // 调 Tauri dialog 选目录；被取消或不可用（如浏览器预览）时返回 undefined。
 async function pickDirectory(): Promise<string | undefined> {
@@ -31,13 +31,14 @@ async function pickFile(): Promise<string | undefined> {
   }
 }
 
-export default function RulesTab() {
+export default function RulesTab({ toast }: { toast?: ToastApi }) {
   const [scope, setScope] = useState<RulesScope>("global");
   const [repoPath, setRepoPath] = useState<string>("");
   const [rules, setRules] = useState<Rule[]>([]);
   // 损坏 JSON 时标记，展示「重置为空」入口而非直接崩溃/覆盖。
   const [corrupt, setCorrupt] = useState(false);
-  const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
+  // 损坏 JSON 的中文原因（就地展示在「重置为空」入口旁）。
+  const [corruptDetail, setCorruptDetail] = useState<string>("");
   const [checkFile, setCheckFile] = useState<string>("");
   const [checkResult, setCheckResult] = useState<string>("");
 
@@ -60,19 +61,18 @@ export default function RulesTab() {
           // 损坏 JSON：保留空表 + 标记，允许用户「重置为空」覆盖。
           setRules([]);
           setCorrupt(true);
-          setStatus({ kind: "error", text: `读取规则失败：${res.stderr}` });
+          setCorruptDetail(translateError(res.stderr));
         }
       })
       .catch((e) => {
-        if (!cancelled) setStatus({ kind: "error", text: `读取规则失败：${String(e)}` });
+        if (!cancelled) toast?.error(`读取规则失败：${String(e)}`);
       });
     return () => {
       cancelled = true;
     };
-  }, [scope, repoPath]);
+  }, [scope, repoPath, toast]);
 
   const handleScopeChange = async (next: RulesScope) => {
-    setStatus({ kind: "idle", text: "" });
     setCheckResult("");
     if (next === "repo" && repoPath.length === 0) {
       const dir = await pickDirectory();
@@ -87,19 +87,18 @@ export default function RulesTab() {
   };
 
   const handleSave = async () => {
-    setStatus({ kind: "idle", text: "" });
     if (scope === "repo" && repoPath.length === 0) {
-      setStatus({ kind: "error", text: "请先选择仓库目录" });
+      toast?.error("请先选择仓库目录");
       return;
     }
     // 客户端先做一次空值拦截，给出更即时的中文提示（后端仍会二次校验并给行号）。
     for (let i = 0; i < rules.length; i++) {
       if (rules[i].path.trim().length === 0) {
-        setStatus({ kind: "error", text: `第 ${i + 1} 条规则的 path 不能为空` });
+        toast?.error(`第 ${i + 1} 条规则的 path 不能为空`);
         return;
       }
       if (rules[i].rule.trim().length === 0) {
-        setStatus({ kind: "error", text: `第 ${i + 1} 条规则的 rule 不能为空` });
+        toast?.error(`第 ${i + 1} 条规则的 rule 不能为空`);
         return;
       }
     }
@@ -108,18 +107,17 @@ export default function RulesTab() {
       const res = await invokeSetRules(scope, scope === "repo" ? repoPath : undefined, file);
       if (res.ok) {
         setCorrupt(false);
-        setStatus({ kind: "ok", text: "已保存规则文件" });
+        toast?.success("已保存规则文件");
       } else {
-        setStatus({ kind: "error", text: `保存失败：${res.stderr}` });
+        toast?.error(`保存失败：${translateError(res.stderr)}`);
       }
     } catch (e) {
-      setStatus({ kind: "error", text: `保存失败：${String(e)}` });
+      toast?.error(`保存失败：${String(e)}`);
     }
   };
 
   const handleResetCorrupt = async () => {
     setRules([]);
-    setStatus({ kind: "idle", text: "" });
     try {
       const res = await invokeSetRules(
         scope,
@@ -128,12 +126,12 @@ export default function RulesTab() {
       );
       if (res.ok) {
         setCorrupt(false);
-        setStatus({ kind: "ok", text: "已重置为空规则文件" });
+        toast?.success("已重置为空规则文件");
       } else {
-        setStatus({ kind: "error", text: `重置失败：${res.stderr}` });
+        toast?.error(`重置失败：${translateError(res.stderr)}`);
       }
     } catch (e) {
-      setStatus({ kind: "error", text: `重置失败：${String(e)}` });
+      toast?.error(`重置失败：${String(e)}`);
     }
   };
 
@@ -147,20 +145,19 @@ export default function RulesTab() {
 
   const handleCheck = async () => {
     if (checkFile.length === 0) {
-      setStatus({ kind: "error", text: "请先选择要验证的源码文件" });
+      toast?.error("请先选择要验证的源码文件");
       return;
     }
-    setStatus({ kind: "idle", text: "" });
     try {
       const res = await invokeCheckRules(checkFile, scope === "repo" ? repoPath : undefined);
       if (res.ok) {
         setCheckResult(res.matched ?? res.stdout);
       } else {
         setCheckResult("");
-        setStatus({ kind: "error", text: `验证失败：${res.stderr || res.stdout}` });
+        toast?.error(`验证失败：${translateError(res.stderr || res.stdout)}`);
       }
     } catch (e) {
-      setStatus({ kind: "error", text: `验证失败：${String(e)}` });
+      toast?.error(`验证失败：${String(e)}`);
     }
   };
 
@@ -204,7 +201,7 @@ export default function RulesTab() {
 
       {corrupt && (
         <p className="error">
-          规则文件损坏（不是合法 JSON）。
+          规则文件损坏（{corruptDetail || "不是合法 JSON"}）。
           <button type="button" onClick={() => void handleResetCorrupt()}>
             重置为空
           </button>
@@ -234,10 +231,6 @@ export default function RulesTab() {
           保存规则文件
         </button>
       </div>
-
-      {status.kind !== "idle" && (
-        <p className={status.kind === "ok" ? "status-ok" : "error"}>{status.text}</p>
-      )}
     </section>
   );
 }

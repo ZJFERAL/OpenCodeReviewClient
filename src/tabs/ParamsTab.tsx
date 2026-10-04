@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { invokeGetConfig, invokeSetParam } from "../ipc";
+import type { ToastApi } from "../components/Toast";
+import { invokeGetConfig, invokeSetParam, translateError } from "../ipc";
 import { EFFORT_LEVELS, REVIEW_FORMATS } from "../types";
 
 // Params Tab（spec §4.2 / §5.4）：
@@ -61,9 +62,7 @@ export function buildReviewPreview(values: ReviewPreviewValues): string {
 // 拦截 `--help`/`-h` 这类会被 CLI 当 flag 静默吞掉（exit 0 但不落盘）的值。
 export const MAX_TOKENS_RE = /^\d+$/;
 
-type Status = { kind: "idle" | "ok" | "error"; text: string };
-
-export default function ParamsTab() {
+export default function ParamsTab({ toast }: { toast?: ToastApi }) {
   // 可持久化项（max_tokens / effort）。
   const [maxTokens, setMaxTokens] = useState("");
   const [effort, setEffort] = useState("");
@@ -72,7 +71,6 @@ export default function ParamsTab() {
   const [concurrency, setConcurrency] = useState("");
   const [format, setFormat] = useState("text");
   const [exclude, setExclude] = useState("");
-  const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
   const [saving, setSaving] = useState(false);
 
   // 从 get_config 预填可持久化项（异步到达后重填，与 ProviderForm 同一模式）。
@@ -101,15 +99,11 @@ export default function ParamsTab() {
   // Minor-1：部分成功时错误文案补「已写入：…」，避免用户误以为全部失败而重复保存。
   // Minor-2：await 期间置 saving，禁用保存按钮，避免连点并发。
   const handleSave = async () => {
-    setStatus({ kind: "idle", text: "" });
     const steps: Array<{ field: string; key: string; value: string }> = [];
     const mt = maxTokens.trim();
     if (mt.length > 0) {
       if (!MAX_TOKENS_RE.test(mt)) {
-        setStatus({
-          kind: "error",
-          text: "保存失败：Max Tokens 必须是正整数（仅数字，不能含 --help 等字符）",
-        });
+        toast?.error("保存失败：Max Tokens 必须是正整数（仅数字，不能含 --help 等字符）");
         return;
       }
       steps.push({ field: "Max Tokens", key: "max_tokens", value: mt });
@@ -118,7 +112,7 @@ export default function ParamsTab() {
       steps.push({ field: "Effort", key: "effort", value: effort.trim() });
     }
     if (steps.length === 0) {
-      setStatus({ kind: "ok", text: "没有需要保存的参数" });
+      toast?.success("没有需要保存的参数");
       return;
     }
 
@@ -131,13 +125,13 @@ export default function ParamsTab() {
           res = await invokeSetParam(step.key, step.value);
         } catch (e) {
           const suffix = written.length > 0 ? `（已写入：${written.join("、")}）` : "";
-          setStatus({ kind: "error", text: `保存失败：${step.field}（${String(e)}）${suffix}` });
+          toast?.error(`保存失败：${step.field}（${String(e)}）${suffix}`);
           return;
         }
         if (!res.ok) {
-          const detail = (res.stderr || res.stdout).trim().replace(/\s+/g, " ");
+          const detail = translateError(res.stderr || res.stdout);
           const suffix = written.length > 0 ? `（已写入：${written.join("、")}）` : "";
-          setStatus({ kind: "error", text: `保存失败：${step.field}（${detail}）${suffix}` });
+          toast?.error(`保存失败：${step.field}（${detail}）${suffix}`);
           return;
         }
         written.push(step.field);
@@ -145,15 +139,15 @@ export default function ParamsTab() {
     } finally {
       setSaving(false);
     }
-    setStatus({ kind: "ok", text: "已保存参数" });
+    toast?.success("已保存参数");
   };
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(preview);
-      setStatus({ kind: "ok", text: "命令已复制" });
+      toast?.success("命令已复制");
     } catch {
-      setStatus({ kind: "error", text: "复制失败，请手动选中复制" });
+      toast?.error("复制失败，请手动选中复制");
     }
   };
 
@@ -248,10 +242,6 @@ export default function ParamsTab() {
         </div>
         {previewProblem && <p className="error">{previewProblem}</p>}
       </div>
-
-      {status.kind !== "idle" && (
-        <p className={status.kind === "ok" ? "status-ok" : "error"}>{status.text}</p>
-      )}
     </section>
   );
 }

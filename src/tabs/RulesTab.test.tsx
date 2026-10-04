@@ -3,9 +3,12 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import RulesTab from "./RulesTab";
 import { invokeCheckRules, invokeGetRules, invokeSetRules } from "../ipc";
+import { WithToasts } from "../test-utils";
 
 // RulesTab 消费 ipc 命令与 dialog 插件；这里整体 mock 掉，断言触发参数与状态流转。
-vi.mock("../ipc", () => ({
+// 用部分 mock（保留真实 translateError），使错误中文化路径也走真实实现。
+vi.mock("../ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc")>()),
   invokeGetRules: vi.fn(),
   invokeSetRules: vi.fn(),
   invokeCheckRules: vi.fn(),
@@ -59,17 +62,18 @@ describe("RulesTab 加载", () => {
       stdout: "",
       stderr: "invalid json in ...",
     });
-    render(<RulesTab />);
+    render(<WithToasts>{(toast) => <RulesTab toast={toast} />}</WithToasts>);
 
     await waitFor(() => expect(screen.getByText(/重置为空/)).toBeInTheDocument());
-    expect(screen.getByText(/invalid json/)).toBeInTheDocument();
+    // 损坏原因经 translateError 中文化后就地展示。
+    expect(screen.getByText(/JSON 文件损坏/)).toBeInTheDocument();
   });
 });
 
 // 保存：客户端空值拦截 + 合法时调用 set_rules。
 describe("RulesTab 保存", () => {
   it("path 为空时客户端拦截，不下发 set_rules", async () => {
-    render(<RulesTab />);
+    render(<WithToasts>{(toast) => <RulesTab toast={toast} />}</WithToasts>);
     await flushLoad();
     fireEvent.click(screen.getByRole("button", { name: "+ 新增规则" }));
     await waitFor(() => expect(screen.getByLabelText("path-0")).toBeInTheDocument());
@@ -80,7 +84,7 @@ describe("RulesTab 保存", () => {
   });
 
   it("合法规则保存时调用 set_rules(global, undefined, {rules})", async () => {
-    render(<RulesTab />);
+    render(<WithToasts>{(toast) => <RulesTab toast={toast} />}</WithToasts>);
     await flushLoad();
     fireEvent.click(screen.getByRole("button", { name: "+ 新增规则" }));
     fireEvent.change(screen.getByLabelText("path-0"), { target: { value: "**/*.java" } });
@@ -91,6 +95,7 @@ describe("RulesTab 保存", () => {
     expect(mSet).toHaveBeenCalledWith("global", undefined, {
       rules: [{ path: "**/*.java", rule: "检查", mergeSystemRule: true }],
     });
+    // 保存成功经全局 Toast 展示。
     await waitFor(() => expect(screen.getByText("已保存规则文件")).toBeInTheDocument());
   });
 });
@@ -151,5 +156,27 @@ describe("RulesTab 验证命中", () => {
 
     await waitFor(() => expect(mCheck).toHaveBeenCalled());
     expect(mCheck).toHaveBeenCalledWith("F:/myrepo/src/Bar.java", "F:/myrepo");
+  });
+
+  // Task 8：验证失败时经 Toast 展示中文化错误。
+  it("验证失败时经 Toast 展示中文错误", async () => {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    vi.mocked(open).mockResolvedValue("F:/not/a/repo/Foo.java");
+    mCheck.mockResolvedValue({
+      ok: false,
+      exitCode: 1,
+      stdout: "",
+      stderr: "fatal: not a git repository",
+    });
+
+    render(<WithToasts>{(toast) => <RulesTab toast={toast} />}</WithToasts>);
+    await flushLoad();
+    fireEvent.click(screen.getByRole("button", { name: "选择文件…" }));
+    await waitFor(() => expect(screen.getByText("F:/not/a/repo/Foo.java")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "用 ocr rules check 验证" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("验证失败：该目录不是 git 仓库")).toBeInTheDocument()
+    );
   });
 });

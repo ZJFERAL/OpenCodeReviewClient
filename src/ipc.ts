@@ -10,6 +10,41 @@ export type OcrResult = {
   data?: unknown;
 };
 
+// 后端 stderr / 输出关键词 → 中文提示（spec §7「命令失败解析」）。
+// 命中已知关键词时返回单句中文提示（不含原始 stderr，避免把 CLI 内部细节暴露给用户）；
+// 未知关键词回退为原始文本（压缩空白 + 截断），保证信息不丢失。
+// 顺序即优先级：首个命中的模式生效。
+const ERROR_HINTS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Windows cmd 缺失命令报 `is not recognized`，POSIX shell 报 `command not found`，两者同义。
+  [/command not found|is not recognized as an internal or external command/i, "未检测到 ocr"],
+  [/connection error/i, "LLM 连接失败"],
+  [/unknown flag/i, "不支持的参数"],
+  [/unsupported key/i, "该参数不可持久化"],
+  [/unsupported value/i, "参数值不合法"],
+  [/invalid json/i, "JSON 文件损坏（内容不是合法 JSON）"],
+  [/not a git repository/i, "该目录不是 git 仓库"],
+  [/半完成/, "保存可能只完成了一半，请重试"],
+];
+
+// 回退文案的最大长度（超出以 … 收尾），避免超长 stderr 撑爆 Toast。
+const ERROR_FALLBACK_MAX = 200;
+
+// 把后端 stderr 映射为面向用户的中文提示。
+// - 命中已知关键词 → 单句中文提示；
+// - 空输入 → 「未知错误」；
+// - 其它 → 压缩空白的原始文本（截断到 ERROR_FALLBACK_MAX）。
+export function translateError(stderr: string): string {
+  const text = (stderr ?? "").trim();
+  if (text.length === 0) return "未知错误";
+  for (const [re, hint] of ERROR_HINTS) {
+    if (re.test(text)) return hint;
+  }
+  const compact = text.replace(/\s+/g, " ");
+  return compact.length > ERROR_FALLBACK_MAX
+    ? compact.slice(0, ERROR_FALLBACK_MAX) + "…"
+    : compact;
+}
+
 // 统一封装 Tauri `invoke`，所有前端调用复用这一个入口。
 // cmd 为预留参数（Rust 桩固定调用 `ocr`，见 src-tauri/src/ocr.rs），
 // args 为传给 ocr 的命令行参数列表。

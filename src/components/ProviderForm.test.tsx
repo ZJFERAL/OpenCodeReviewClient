@@ -9,9 +9,12 @@ import {
   invokeSetModel,
   invokeTestConnection,
 } from "../ipc";
+import { WithToasts } from "../test-utils";
 
 // Task 5：保存/测试连接会调用 ipc 命令，这里整体 mock 掉，断言触发参数正确。
-vi.mock("../ipc", () => ({
+// Task 8：用部分 mock 保留真实 translateError，错误中文化路径也走真实实现。
+vi.mock("../ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc")>()),
   invokeSetProvider: vi.fn(),
   invokeSetProviderKey: vi.fn(),
   invokeSetCustomProvider: vi.fn(),
@@ -37,7 +40,7 @@ beforeEach(() => {
 // 点击保存：按 provider → key → model 顺序逐条 invoke，参数与表单值一致。
 describe("ProviderForm 保存触发", () => {
   it("内置 provider：保存调用 set_provider / set_provider_key / set_model", async () => {
-    render(<ProviderForm provider="anthropic" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="anthropic" toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-x" } });
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "claude-x" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -48,6 +51,7 @@ describe("ProviderForm 保存触发", () => {
     expect(mSetModel).toHaveBeenCalledWith("claude-x");
     // 非 custom 分支不应调用自定义网关命令。
     expect(mSetCustom).not.toHaveBeenCalled();
+    // 保存成功经全局 Toast 展示。
     await waitFor(() => expect(screen.getByText("已保存")).toBeInTheDocument());
   });
 
@@ -83,7 +87,7 @@ describe("ProviderForm 保存触发", () => {
       stdout: "",
       stderr: "Error: unknown config key: providers.anthropic.api_key",
     } as typeof ok);
-    render(<ProviderForm provider="anthropic" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="anthropic" toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-bad" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
@@ -93,13 +97,31 @@ describe("ProviderForm 保存触发", () => {
     // 失败点之后不再继续调 model。
     expect(mSetModel).not.toHaveBeenCalled();
   });
+
+  // Task 8：已知关键词的错误应被翻译为中文（而非原样透传 stderr）。
+  it("保存失败且 stderr 命中已知关键词时展示中文提示", async () => {
+    mSetProvider.mockResolvedValue({
+      ok: false,
+      exitCode: 1,
+      stdout: "",
+      stderr: "unsupported key: provider",
+    } as typeof ok);
+    render(<WithToasts>{(toast) => <ProviderForm provider="anthropic" toast={toast} />}</WithToasts>);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/保存失败：Provider 名称 写入出错（该参数不可持久化）/)
+      ).toBeInTheDocument()
+    );
+  });
 });
 
 // 测试连接：成功显示 ✓，失败显示 ✗。
 describe("ProviderForm 测试连接", () => {
   it("成功时显示 ✓", async () => {
     mTestConn.mockResolvedValue({ ...ok, success: true, message: "pong" });
-    render(<ProviderForm provider="openai" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="openai" toast={toast} />}</WithToasts>);
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
 
     await waitFor(() => expect(screen.getByText(/✓ 连接成功/)).toBeInTheDocument());
@@ -113,17 +135,34 @@ describe("ProviderForm 测试连接", () => {
       success: false,
       message: "401 Unauthorized",
     });
-    render(<ProviderForm provider="openai" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="openai" toast={toast} />}</WithToasts>);
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
 
     await waitFor(() => expect(screen.getByText(/✗ 连接失败/)).toBeInTheDocument());
+  });
+
+  // Task 8：连接失败原因命中已知关键词时翻译为中文。
+  it("失败原因含 connection error 时经 Toast 展示「LLM 连接失败」", async () => {
+    mTestConn.mockResolvedValue({
+      ...ok,
+      ok: false,
+      exitCode: 1,
+      success: false,
+      message: "connection error: ECONNREFUSED",
+    });
+    render(<WithToasts>{(toast) => <ProviderForm provider="openai" toast={toast} />}</WithToasts>);
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("✗ 连接失败：LLM 连接失败")).toBeInTheDocument()
+    );
   });
 });
 
 // I4：自定义网关名前置校验（含 `.`/大写/空格等会让 ocr 命令失败）。
 describe("ProviderForm 网关名校验", () => {
   it("网关名含 `.` 时不触发任何保存调用，并显示中文提示", async () => {
-    render(<ProviderForm provider="custom" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="custom" toast={toast} />}</WithToasts>);
     // provider=custom 分支下，填一个含 `.` 的非法网关名。
     fireEvent.change(screen.getByLabelText("Gateway 名称"), { target: { value: "my.gw" } });
     fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://x/v1" } });
@@ -140,7 +179,7 @@ describe("ProviderForm 网关名校验", () => {
   });
 
   it("合法网关名（小写+连字符）正常保存", async () => {
-    render(<ProviderForm provider="custom" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="custom" toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("Gateway 名称"), { target: { value: "my-gw-2" } });
     fireEvent.change(screen.getByLabelText("URL"), { target: { value: "https://x/v1" } });
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
@@ -151,7 +190,7 @@ describe("ProviderForm 网关名校验", () => {
   });
 
   it("网关名为空时提示填写且不保存", async () => {
-    render(<ProviderForm provider="custom" />);
+    render(<WithToasts>{(toast) => <ProviderForm provider="custom" toast={toast} />}</WithToasts>);
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => expect(screen.getByText(/请填写自定义网关名称/)).toBeInTheDocument());
@@ -189,6 +228,12 @@ describe("ProviderForm 字段联动", () => {
 
   it("api_key 输入一律 type=password 掩码（spec §7）", () => {
     render(<ProviderForm provider="anthropic" />);
+    expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
+  });
+
+  // Task 8 掩码复核：custom 分支的 API Key 同样必须是 password。
+  it("custom 分支的 API Key 也是 type=password", () => {
+    render(<ProviderForm provider="custom" />);
     expect(screen.getByLabelText("API Key")).toHaveAttribute("type", "password");
   });
 

@@ -3,9 +3,12 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import ParamsTab, { buildReviewPreview, previewValueProblem } from "./ParamsTab";
 import { invokeGetConfig, invokeSetParam } from "../ipc";
+import { WithToasts } from "../test-utils";
 
 // ParamsTab 消费 ipc 命令；整体 mock 掉，断言触发参数与状态流转。
-vi.mock("../ipc", () => ({
+// 用部分 mock（保留真实 translateError），使错误中文化路径也走真实实现。
+vi.mock("../ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc")>()),
   invokeGetConfig: vi.fn(),
   invokeSetParam: vi.fn(),
 }));
@@ -130,7 +133,7 @@ describe("ParamsTab 命令预览", () => {
 // 保存：max_tokens/effort 逐条走 set_param 持久化。
 describe("ParamsTab 保存可持久化参数", () => {
   it("保存时调用 set_param('max_tokens') 与 set_param('effort')", async () => {
-    render(<ParamsTab />);
+    render(<WithToasts>{(toast) => <ParamsTab toast={toast} />}</WithToasts>);
 
     fireEvent.change(screen.getByLabelText("Max Tokens"), { target: { value: "200000" } });
     fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "high" } });
@@ -139,6 +142,7 @@ describe("ParamsTab 保存可持久化参数", () => {
     await waitFor(() => expect(mSetParam).toHaveBeenCalledTimes(2));
     expect(mSetParam).toHaveBeenCalledWith("max_tokens", "200000");
     expect(mSetParam).toHaveBeenCalledWith("effort", "high");
+    // 保存结果经全局 Toast 展示（不再有本地 status 行）。
     await waitFor(() => expect(screen.getByText("已保存参数")).toBeInTheDocument());
   });
 
@@ -151,28 +155,33 @@ describe("ParamsTab 保存可持久化参数", () => {
     expect(mSetParam).toHaveBeenCalledWith("max_tokens", "8192");
   });
 
-  // 后端白名单拒绝时（ok=false + `unsupported key`），展示中文错误而非静默。
-  it("set_param 失败时显示错误提示", async () => {
+  // 后端白名单拒绝时（ok=false + `unsupported key`），Toast 展示中文错误而非静默。
+  it("set_param 失败时经 Toast 展示中文错误", async () => {
     mSetParam.mockResolvedValue({
       ok: false,
       exitCode: 1,
       stdout: "",
       stderr: "unsupported key: timeout",
     });
-    render(<ParamsTab />);
+    render(<WithToasts>{(toast) => <ParamsTab toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("Max Tokens"), { target: { value: "200000" } });
     fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
 
-    await waitFor(() => expect(screen.getByText(/保存失败/)).toBeInTheDocument());
+    // `unsupported key` 被翻译为「该参数不可持久化」，且带字段名。
+    await waitFor(() =>
+      expect(screen.getByText(/保存失败：Max Tokens（该参数不可持久化）/)).toBeInTheDocument()
+    );
   });
 
   // I1：非法 max_tokens（`--help` 这类会被 CLI 静默吞掉的值）前端拦截，不触发保存。
   it("非法 max_tokens（--help）被前端拦截，不调用 set_param", async () => {
-    render(<ParamsTab />);
+    render(<WithToasts>{(toast) => <ParamsTab toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("Max Tokens"), { target: { value: "--help" } });
     fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
 
-    await waitFor(() => expect(screen.getByText(/Max Tokens 必须是正整数/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/Max Tokens 必须是正整数/)).toBeInTheDocument()
+    );
     expect(mSetParam).not.toHaveBeenCalled();
   });
 
@@ -186,13 +195,16 @@ describe("ParamsTab 保存可持久化参数", () => {
         stdout: "",
         stderr: "unsupported value: ultra",
       }); // effort 失败
-    render(<ParamsTab />);
+    render(<WithToasts>{(toast) => <ParamsTab toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("Max Tokens"), { target: { value: "8192" } });
     fireEvent.change(screen.getByLabelText("Effort"), { target: { value: "high" } });
     fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
 
+    // `unsupported value` → 「参数值不合法」。
     await waitFor(() =>
-      expect(screen.getByText(/保存失败：Effort.*已写入：Max Tokens/)).toBeInTheDocument()
+      expect(
+        screen.getByText(/保存失败：Effort（参数值不合法）（已写入：Max Tokens）/)
+      ).toBeInTheDocument()
     );
   });
 
@@ -202,7 +214,7 @@ describe("ParamsTab 保存可持久化参数", () => {
     mSetParam.mockImplementation(
       () => new Promise<typeof ok>((resolve) => { resolveSave = resolve; })
     );
-    render(<ParamsTab />);
+    render(<WithToasts>{(toast) => <ParamsTab toast={toast} />}</WithToasts>);
     fireEvent.change(screen.getByLabelText("Max Tokens"), { target: { value: "8192" } });
     fireEvent.click(screen.getByRole("button", { name: "保存参数" }));
 

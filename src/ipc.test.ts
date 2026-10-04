@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeConfig, normalizeRules } from "./ipc";
+import { normalizeConfig, normalizeRules, translateError } from "./ipc";
 
 // 覆盖真实 config.json schema 的键名映射（Important-1）：
 // model 在设过 provider 后嵌在 providers.<name>.model，而非顶层。
@@ -63,5 +63,65 @@ describe("normalizeRules", () => {
     );
     expect(normalizeRules(null)).toEqual({ rules: [] });
     expect(normalizeRules({ rules: "not-array" })).toEqual({ rules: [] });
+  });
+});
+
+// Task 8：后端 stderr 关键词 → 中文提示（spec §7「命令失败解析」）。
+describe("translateError 错误中文化", () => {
+  // brief Step 1 要求的四条映射。
+  it("command not found → 未检测到 ocr", () => {
+    expect(translateError("ocr: command not found")).toBe("未检测到 ocr");
+  });
+
+  it("connection error → LLM 连接失败", () => {
+    expect(translateError("✗ connection error: ECONNREFUSED")).toBe("LLM 连接失败");
+  });
+
+  it("unknown flag → 不支持的参数", () => {
+    expect(translateError("Error: unknown flag: --language")).toBe("不支持的参数");
+  });
+
+  it("unsupported key → 该参数不可持久化", () => {
+    expect(translateError("unsupported key: timeout")).toBe("该参数不可持久化");
+  });
+
+  // Windows cmd 下命令缺失的真实措辞，与 POSIX 的 `command not found` 同义。
+  it("Windows `is not recognized` 同样映射为未检测到 ocr", () => {
+    expect(
+      translateError("'ocr' is not recognized as an internal or external command")
+    ).toBe("未检测到 ocr");
+  });
+
+  it("补充关键词：unsupported value / invalid json / not a git repository / 半完成", () => {
+    expect(translateError("unsupported value: -1")).toBe("参数值不合法");
+    expect(translateError("invalid json in C:/x/config.json: expected value")).toBe(
+      "JSON 文件损坏（内容不是合法 JSON）"
+    );
+    expect(translateError("fatal: not a git repository (or any of the parent)")).toBe(
+      "该目录不是 git 仓库"
+    );
+    expect(translateError("custom_providers.x.url: boom（自定义网关配置可能处于半完成状态）")).toBe(
+      "保存可能只完成了一半，请重试"
+    );
+  });
+
+  it("大小写不敏感", () => {
+    expect(translateError("CONNECTION ERROR")).toBe("LLM 连接失败");
+  });
+
+  it("未知关键词回退为压缩后的原始文本", () => {
+    expect(translateError("some   weird\n\terror")).toBe("some weird error");
+  });
+
+  it("超长未知文本被截断（≤201 字符，含省略号）", () => {
+    const long = "x".repeat(500);
+    const out = translateError(long);
+    expect(out.length).toBe(201);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("空输入 → 未知错误", () => {
+    expect(translateError("")).toBe("未知错误");
+    expect(translateError("   \n  ")).toBe("未知错误");
   });
 });

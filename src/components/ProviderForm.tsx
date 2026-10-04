@@ -6,7 +6,9 @@ import {
   invokeSetProvider,
   invokeSetProviderKey,
   invokeTestConnection,
+  translateError,
 } from "../ipc";
+import type { ToastApi } from "./Toast";
 
 // 表单本地值。provider 为当前选中的 provider 名（"custom" 表示自定义网关分支）。
 export type ProviderFormValues = {
@@ -29,6 +31,8 @@ export type ProviderFormProps = {
   providers?: string[];
   // 内部字段变化回调。
   onChange?: (values: ProviderFormValues) => void;
+  // 全局 Toast 上报接口（保存/测试结果）。缺省时静默，便于单测直接渲染本组件。
+  toast?: ToastApi;
 };
 
 // 判定某 provider 是否为自定义网关分支（"custom" 或出现在 customProviders 中的名称）。
@@ -90,12 +94,8 @@ function optionsFor(providers: string[] | undefined, config: ProviderConfig | un
   return [...set];
 }
 
-export default function ProviderForm({ provider, config, providers, onChange }: ProviderFormProps) {
+export default function ProviderForm({ provider, config, providers, onChange, toast }: ProviderFormProps) {
   const [values, setValues] = useState<ProviderFormValues>(() => buildValues(provider, config));
-  const [status, setStatus] = useState<{ kind: "idle" | "ok" | "error"; text: string }>({
-    kind: "idle",
-    text: "",
-  });
   const [testing, setTesting] = useState(false);
 
   // 当 provider prop 变化，或 config 异步到达/更新时，用新值重填表单。
@@ -116,16 +116,15 @@ export default function ProviderForm({ provider, config, providers, onChange }: 
   };
 
   // 保存：按表单状态逐条下发 `ocr config set`。顺序 = provider → (key / 自定义网关字段) → model。
-  // 任一失败即中止并给出「字段名 + 中文说明 + ocr 输出」的提示（审查焦点 #2）。
+  // 任一失败即中止并通过全局 Toast 给出「字段名 + 中文说明」的提示（审查焦点 #2）。
   const handleSave = async () => {
-    setStatus({ kind: "idle", text: "" });
     const name = effectiveProvider(values, custom);
 
     // I4：自定义网关名前置校验（含 `.`/大写/空格等会让 ocr 命令失败），不合法则直接提示、不调用保存。
     if (custom) {
       const gatewayError = validateGatewayName(name);
       if (gatewayError) {
-        setStatus({ kind: "error", text: `保存失败：Gateway 名称（${gatewayError}）` });
+        toast?.error(`保存失败：Gateway 名称（${gatewayError}）`);
         return;
       }
     }
@@ -137,7 +136,8 @@ export default function ProviderForm({ provider, config, providers, onChange }: 
     ) => {
       const res = await run();
       if (!res.ok) {
-        const detail = (res.stderr || res.stdout).trim().replace(/\s+/g, " ");
+        // 把后端 stderr 关键词翻译成中文（如 `unsupported key` → 「该参数不可持久化」）。
+        const detail = translateError(res.stderr || res.stdout);
         throw new Error(`${field}｜${detail}`);
       }
     };
@@ -160,32 +160,26 @@ export default function ProviderForm({ provider, config, providers, onChange }: 
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const [field, detail] = msg.split("｜");
-      setStatus({
-        kind: "error",
-        text: detail
-          ? `保存失败：${field} 写入出错（${detail}）`
-          : `保存失败：${field}`,
-      });
+      toast?.error(detail ? `保存失败：${field} 写入出错（${detail}）` : `保存失败：${field}`);
       return;
     }
 
-    setStatus({ kind: "ok", text: "已保存" });
+    toast?.success("已保存");
   };
 
-  // 测试连接：调 `test_connection`，展示 ✓/✗。
+  // 测试连接：调 `test_connection`，通过全局 Toast 展示成功/失败。
   const handleTest = async () => {
     setTesting(true);
-    setStatus({ kind: "idle", text: "" });
     try {
       const res = await invokeTestConnection();
       if (res.success) {
-        setStatus({ kind: "ok", text: `✓ 连接成功${res.message ? "：" + res.message : ""}` });
+        toast?.success(`✓ 连接成功${res.message ? "：" + res.message : ""}`);
       } else {
-        const detail = res.message || res.stderr || res.stdout || "未知错误";
-        setStatus({ kind: "error", text: `✗ 连接失败：${detail.trim()}` });
+        const detail = translateError(res.message || res.stderr || res.stdout);
+        toast?.error(`✗ 连接失败：${detail}`);
       }
     } catch (e) {
-      setStatus({ kind: "error", text: `✗ 连接失败：${String(e)}` });
+      toast?.error(`✗ 连接失败：${String(e)}`);
     } finally {
       setTesting(false);
     }
@@ -304,10 +298,6 @@ export default function ProviderForm({ provider, config, providers, onChange }: 
           {testing ? "测试中…" : "测试连接"}
         </button>
       </div>
-
-      {status.kind !== "idle" && (
-        <p className={status.kind === "ok" ? "status-ok" : "error"}>{status.text}</p>
-      )}
     </form>
   );
 }

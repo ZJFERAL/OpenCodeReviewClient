@@ -3,11 +3,14 @@ import { render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import ProviderTab from "./ProviderTab";
 import { invokeGetConfig, invokeListProviders } from "../ipc";
+import { WithToasts } from "../test-utils";
 
 // 关键回归（Critical-1 的最小复现）：ProviderTab 首次渲染 config=undefined，
 // get_config 异步返回后，表单必须被重新填充（而不是保持空值）。
 // Task 5：ProviderTab 同时调用 list_providers 取内置 provider 名。
-vi.mock("../ipc", () => ({
+// Task 8：用部分 mock 保留真实 translateError，错误中文化路径也走真实实现。
+vi.mock("../ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../ipc")>()),
   invokeGetConfig: vi.fn(),
   invokeListProviders: vi.fn(),
 }));
@@ -49,9 +52,10 @@ describe("ProviderTab 异步配置加载", () => {
       stderr: "invalid json in config.json",
     });
 
-    render(<ProviderTab />);
+    render(<WithToasts>{(toast) => <ProviderTab toast={toast} />}</WithToasts>);
+    // stderr 关键词被中文化后就地展示。
     await waitFor(() =>
-      expect(screen.getByText(/invalid json/)).toBeInTheDocument()
+      expect(screen.getByText(/JSON 文件损坏/)).toBeInTheDocument()
     );
   });
 });

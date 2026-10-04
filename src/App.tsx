@@ -1,15 +1,20 @@
 import { useEffect, useState } from "react";
 import StatusBar from "./components/StatusBar";
+import { ToastContainer, useToast, type ToastApi } from "./components/Toast";
 import ProviderTab from "./tabs/ProviderTab";
 import RulesTab from "./tabs/RulesTab";
 import ParamsTab from "./tabs/ParamsTab";
 import { invokeProbe } from "./ipc";
 
-const TABS = [
+const TABS: ReadonlyArray<{
+  key: "provider" | "rules" | "params";
+  label: string;
+  Component: (props: { toast?: ToastApi }) => JSX.Element;
+}> = [
   { key: "provider", label: "Provider", Component: ProviderTab },
   { key: "rules", label: "Rules", Component: RulesTab },
   { key: "params", label: "Params", Component: ParamsTab },
-] as const;
+];
 
 // 从 invokeProbe 返回的 data 字段安全取出版本号（data 形如 { version: string }）。
 function dataVersion(data: unknown): string | undefined {
@@ -24,6 +29,8 @@ export default function App() {
   const [active, setActive] = useState<(typeof TABS)[number]["key"]>("provider");
   const [ocrInstalled, setOcrInstalled] = useState<boolean>(false);
   const [version, setVersion] = useState<string | undefined>(undefined);
+  // 全局 Toast：各 Tab 的保存/测试结果统一经此展示。
+  const { toasts, toast, dismiss } = useToast();
 
   useEffect(() => {
     let cancelled = false;
@@ -64,8 +71,9 @@ export default function App() {
         ))}
       </nav>
       <main className="content">
-        <ActiveComponent />
+        <ActiveComponent toast={toast} />
       </main>
+      <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </div>
   );
 }
