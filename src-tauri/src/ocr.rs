@@ -201,16 +201,37 @@ pub fn set_model(model: &str) -> Result<OcrResult, String> {
     run_ocr(&["config", "set", "model", model])
 }
 
+// max_tokens 合法性：必须是正整数（拒绝 `--help`/`-h` 这类 flag、`abc`、`0`、`-1`、`1.5` 等）。
+// 纯 ASCII 数字校验，避免 `+`/`e`/小数点被 CLI 或我们的解析误放行。
+fn is_positive_integer(v: &str) -> bool {
+    !v.is_empty()
+        && v.bytes().all(|b| b.is_ascii_digit())
+        && v.parse::<u64>().map(|n| n > 0).unwrap_or(false)
+}
+
 // Params Tab（spec §4.2 / §8.2）：仅 `max_tokens` / `effort` 可经 `config set` 持久化。
 // 白名单硬编码——隔离 HOME 实测：`timeout`/`concurrency`/`format`/`exclude` 是 `ocr review`
 // 的运行时 flag，`config set` 会报 `unknown config key`；故在此于 spawn 前拒绝，
 // 绝不把非法键下发给真实 CLI（安全纪律 + 不给用户制造误导性报错）。
+//
+// I1（静默假成功）：`max_tokens` 值若形如 flag（`--help` / `-h`），CLI 会打印帮助并 **exit 0**，
+// 而 config.json 一字未写 → 若只判空就会返回 ok=true（假成功）。故先做数值校验：
+// 非正整数直接拒绝，绝不 spawn。实测 `abc` 会被 CLI 报错，但 `--help`/`-h` 不会，故必须前置拦截。
 pub fn set_param(key: &str, value: &str) -> Result<OcrResult, String> {
     let v = value.trim();
     match key {
         "max_tokens" => {
             if v.is_empty() {
                 return Ok(skipped_result());
+            }
+            if !is_positive_integer(v) {
+                return Ok(OcrResult {
+                    ok: false,
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: format!("unsupported value: {v}（max_tokens 必须是正整数）"),
+                    data: None,
+                });
             }
             run_ocr(&["config", "set", "max_tokens", v])
         }

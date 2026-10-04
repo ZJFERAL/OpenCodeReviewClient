@@ -159,3 +159,49 @@ fn set_param_empty_value_skips() {
         r.data
     );
 }
+
+// I1（静默假成功）：`max_tokens` 值形如 flag（`--help` / `-h`）时，真实 CLI 会打印帮助并
+// **exit 0** 但 config.json 一字未写。若只判空就会返回 ok=true（假成功）。
+// 修复后必须在 spawn 前拒绝：ok=false 且不 spawn ocr。
+#[test]
+fn set_param_rejects_flag_like_max_tokens() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, original) = setup_mock("mt_flag");
+    std::env::remove_var("FAKE_OCR_EXIT");
+
+    for bad in ["--help", "-h", "abc", "0", "-1", "1.5", "1e6"] {
+        let result = app_lib::ocr::set_param("max_tokens", bad);
+        let r = result.expect("拒绝也应返回 Ok");
+        assert!(!r.ok, "max_tokens=`{bad}` 应被拒绝（非正整数）");
+        assert!(
+            r.stderr.contains("unsupported value"),
+            "max_tokens=`{bad}` 的 stderr 应含 `unsupported value`，实际:\n{}",
+            r.stderr
+        );
+        assert!(
+            !r.stdout.contains("ARGS:"),
+            "max_tokens=`{bad}` 被拒绝时不得 spawn ocr，实际 stdout=\n{}",
+            r.stdout
+        );
+    }
+    teardown(&dir, &original);
+}
+
+// I1：合法正整数仍应正常下发。
+#[test]
+fn set_param_accepts_positive_integer_max_tokens() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (dir, original) = setup_mock("mt_ok");
+    std::env::remove_var("FAKE_OCR_EXIT");
+
+    let result = app_lib::ocr::set_param("max_tokens", "8192");
+    teardown(&dir, &original);
+
+    let r = result.expect("应执行 cmd 成功返回");
+    assert!(r.ok, "正整数应放行；stderr={}", r.stderr);
+    assert!(
+        r.stdout.contains("config set max_tokens 8192"),
+        "应拼出 `config set max_tokens 8192`，实际 stdout=\n{}",
+        r.stdout
+    );
+}

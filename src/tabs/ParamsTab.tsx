@@ -15,8 +15,35 @@ export type ReviewPreviewValues = {
   exclude: string;
 };
 
+// I2：「复制即用」契约——预览值里含 shell 特殊字符时无法保证粘贴后行为与显示一致。
+// 覆盖范围与理由：
+//   - `"` 会破坏 exclude 的引号包裹；
+//   - `%` 在 cmd 中**即使位于双引号内**仍会展开 `%VAR%`（引号挡不住）；
+//   - `& | < > ^` 在双引号内通常安全，但为稳妥一并提示；
+//   - `\r`/`\n` 无法构成单行命令。
+const PREVIEW_UNSAFE_RE = /["%&|<>^\r\n]/;
+
+// 返回首个含特殊字符字段的中文说明；全部安全则 undefined。
+// 与 buildReviewPreview 配合：调用方在返回非 undefined 时禁用「复制命令」。
+export function previewValueProblem(values: ReviewPreviewValues): string | undefined {
+  const fields: Array<[string, string]> = [
+    ["Timeout", values.timeout],
+    ["Concurrency", values.concurrency],
+    ["Format", values.format],
+    ["Exclude", values.exclude],
+  ];
+  for (const [label, raw] of fields) {
+    if (raw.trim().length === 0) continue;
+    if (PREVIEW_UNSAFE_RE.test(raw)) {
+      return `「${label}」含特殊字符（" % & | < > ^ 或换行），无法保证复制即用，请修改后再复制`;
+    }
+  }
+  return undefined;
+}
+
 // 把不可持久化的 review 运行时 flag 拼成 `ocr review --timeout 15 ...` 预览串。
 // 空值跳过对应 flag；exclude 值恒加双引号包裹（含逗号/通配符，复制即用）。
+// 值本身是否可安全复制由 previewValueProblem 判定（含特殊字符时调用方应禁用复制）。
 export function buildReviewPreview(values: ReviewPreviewValues): string {
   const parts = ["ocr review"];
   const timeout = values.timeout.trim();
@@ -30,6 +57,10 @@ export function buildReviewPreview(values: ReviewPreviewValues): string {
   return parts.join(" ");
 }
 
+// I1：max_tokens 前端校验——正整数（纯数字）。后端亦校验，两端防御。
+// 拦截 `--help`/`-h` 这类会被 CLI 当 flag 静默吞掉（exit 0 但不落盘）的值。
+export const MAX_TOKENS_RE = /^\d+$/;
+
 type Status = { kind: "idle" | "ok" | "error"; text: string };
 
 export default function ParamsTab() {
@@ -42,6 +73,7 @@ export default function ParamsTab() {
   const [format, setFormat] = useState("text");
   const [exclude, setExclude] = useState("");
   const [status, setStatus] = useState<Status>({ kind: "idle", text: "" });
+  const [saving, setSaving] = useState(false);
 
   // 从 get_config 预填可持久化项（异步到达后重填，与 ProviderForm 同一模式）。
   useEffect(() => {
@@ -62,13 +94,25 @@ export default function ParamsTab() {
   }, []);
 
   const preview = buildReviewPreview({ timeout, concurrency, format, exclude });
+  const previewProblem = previewValueProblem({ timeout, concurrency, format, exclude });
 
   // 保存：仅下发可持久化项；空值跳过（不覆盖已有值）。
+  // I1：max_tokens 先做正整数校验（拒绝 `--help` 等会被 CLI 静默吞掉的值）。
+  // Minor-1：部分成功时错误文案补「已写入：…」，避免用户误以为全部失败而重复保存。
+  // Minor-2：await 期间置 saving，禁用保存按钮，避免连点并发。
   const handleSave = async () => {
     setStatus({ kind: "idle", text: "" });
     const steps: Array<{ field: string; key: string; value: string }> = [];
-    if (maxTokens.trim().length > 0) {
-      steps.push({ field: "Max Tokens", key: "max_tokens", value: maxTokens.trim() });
+    const mt = maxTokens.trim();
+    if (mt.length > 0) {
+      if (!MAX_TOKENS_RE.test(mt)) {
+        setStatus({
+          kind: "error",
+          text: "保存失败：Max Tokens 必须是正整数（仅数字，不能含 --help 等字符）",
+        });
+        return;
+      }
+      steps.push({ field: "Max Tokens", key: "max_tokens", value: mt });
     }
     if (effort.trim().length > 0) {
       steps.push({ field: "Effort", key: "effort", value: effort.trim() });
@@ -77,18 +121,29 @@ export default function ParamsTab() {
       setStatus({ kind: "ok", text: "没有需要保存的参数" });
       return;
     }
-    for (const step of steps) {
-      try {
-        const res = await invokeSetParam(step.key, step.value);
-        if (!res.ok) {
-          const detail = (res.stderr || res.stdout).trim().replace(/\s+/g, " ");
-          setStatus({ kind: "error", text: `保存失败：${step.field}（${detail}）` });
+
+    const written: string[] = [];
+    setSaving(true);
+    try {
+      for (const step of steps) {
+        let res;
+        try {
+          res = await invokeSetParam(step.key, step.value);
+        } catch (e) {
+          const suffix = written.length > 0 ? `（已写入：${written.join("、")}）` : "";
+          setStatus({ kind: "error", text: `保存失败：${step.field}（${String(e)}）${suffix}` });
           return;
         }
-      } catch (e) {
-        setStatus({ kind: "error", text: `保存失败：${step.field}（${String(e)}）` });
-        return;
+        if (!res.ok) {
+          const detail = (res.stderr || res.stdout).trim().replace(/\s+/g, " ");
+          const suffix = written.length > 0 ? `（已写入：${written.join("、")}）` : "";
+          setStatus({ kind: "error", text: `保存失败：${step.field}（${detail}）${suffix}` });
+          return;
+        }
+        written.push(step.field);
       }
+    } finally {
+      setSaving(false);
     }
     setStatus({ kind: "ok", text: "已保存参数" });
   };
@@ -171,8 +226,8 @@ export default function ParamsTab() {
         />
 
         <div className="provider-actions">
-          <button type="button" onClick={() => void handleSave()}>
-            保存参数
+          <button type="button" onClick={() => void handleSave()} disabled={saving}>
+            {saving ? "保存中…" : "保存参数"}
           </button>
         </div>
       </div>
@@ -187,10 +242,11 @@ export default function ParamsTab() {
           value={preview}
         />
         <div className="provider-actions">
-          <button type="button" onClick={() => void handleCopy()}>
+          <button type="button" onClick={() => void handleCopy()} disabled={previewProblem !== undefined}>
             复制命令
           </button>
         </div>
+        {previewProblem && <p className="error">{previewProblem}</p>}
       </div>
 
       {status.kind !== "idle" && (
