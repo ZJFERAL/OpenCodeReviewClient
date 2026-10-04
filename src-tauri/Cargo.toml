@@ -19,6 +19,9 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# 解析用户主目录（~/.opencodereview/config.json）。Task 2/3 已由 tauri 传递依赖间接引入，
+# 这里显式声明以便无 tauri（--no-default-features）测试下仍可编译本模块。
+dirs = "7"
 # `tauri` 设为 optional：默认 features 为空，使 `cargo test` 链接的 lib/集成测试/二进制
 # 都不引入 tauri（本机 MinGW 旧 binutils 在 dev/test profile 下链接 tauri 运行时
 # 会报 STATUS_ENTRYPOINT_NOT_FOUND 0xc0000139）。构建/运行真实 app 时显式开启：

@@ -14,3 +14,12 @@ pub fn run_ocr(args: Vec<String>) -> Result<crate::ocr::OcrResult, String> {
 pub fn probe_ocr() -> Result<crate::ocr::OcrResult, String> {
     crate::ocr::probe_ocr()
 }
+
+// 前端 invoke("get_config") 的入口 command：直接读取 ~/.opencodereview/config.json。
+// 不发任何 ocr 命令（ocr 无 `config get`）；文件缺失返回空对象，JSON 非法时 ok=false
+// 且 stderr 含 `invalid json`。
+#[cfg(feature = "tauri")]
+#[tauri::command]
+pub fn get_config() -> crate::ocr::OcrResult {
+    crate::ocr::get_config_result()
+}

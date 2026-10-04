@@ -13,7 +13,8 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             commands::run_ocr,
-            commands::probe_ocr
+            commands::probe_ocr,
+            commands::get_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

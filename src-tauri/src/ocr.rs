@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::path::{Path, PathBuf};
 
 // 贯穿所有后续任务的核心结果类型（与前端 src/ipc.ts 的 OcrResult 对应）。
 #[derive(Serialize)]
@@ -104,4 +105,67 @@ pub fn probe_ocr() -> Result<OcrResult, String> {
         r.data = Some(serde_json::json!({ "version": parse_version(&r.stdout).unwrap_or_default() }));
     }
     Ok(r)
+}
+
+// 解析 `~/.opencodereview/config.json` 的绝对路径。
+// 主用 `dirs::home_dir()`（跨平台）；它不可得时回退 `HOME` / `USERPROFILE` 环境变量。
+pub fn config_path() -> PathBuf {
+    let home = dirs::home_dir().or_else(|| {
+        std::env::var("HOME")
+            .ok()
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("USERPROFILE").ok().filter(|s| !s.is_empty()))
+            .map(PathBuf::from)
+    });
+    match home {
+        Some(h) => h.join(".opencodereview").join("config.json"),
+        None => PathBuf::from(".opencodereview").join("config.json"),
+    }
+}
+
+// 从指定路径读配置 JSON。
+// - 文件不存在 → 空对象 `{}`（spec §4.3 同类「缺失即空」处理）
+// - 内容非法 → `Err`，消息含 `invalid json`（供 UI 提示，不 panic）
+pub fn read_config_json_at(path: &Path) -> Result<serde_json::Value, String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => {
+            if text.trim().is_empty() {
+                return Ok(serde_json::json!({}));
+            }
+            serde_json::from_str(&text)
+                .map_err(|e| format!("invalid json in {}: {e}", path.display()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(e) => Err(format!("无法读取 {}: {e}", path.display())),
+    }
+}
+
+// 读真实 `~/.opencodereview/config.json`（路径由 config_path 解析）。
+pub fn read_config_json() -> Result<serde_json::Value, String> {
+    read_config_json_at(&config_path())
+}
+
+// `get_config` command 的实现体（与 Tauri 解耦，便于无 feature 集成测试直接调用）。
+// 成功：ok=true，data = 解析后的配置对象；失败：ok=false，stderr 携带原因（含 `invalid json`）。
+pub fn get_config_result_at(path: &Path) -> OcrResult {
+    match read_config_json_at(path) {
+        Ok(data) => OcrResult {
+            ok: true,
+            exit_code: 0,
+            stdout: String::new(),
+            stderr: String::new(),
+            data: Some(data),
+        },
+        Err(msg) => OcrResult {
+            ok: false,
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: msg,
+            data: None,
+        },
+    }
+}
+
+pub fn get_config_result() -> OcrResult {
+    get_config_result_at(&config_path())
 }

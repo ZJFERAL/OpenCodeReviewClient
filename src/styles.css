@@ -114,3 +114,30 @@ body,
 .placeholder {
   color: var(--muted);
 }
+
+.provider-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 420px;
+}
+
+.provider-form label {
+  color: var(--muted);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+.provider-form input,
+.provider-form select {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+}
+
+.error {
+  color: var(--fail);
+}
