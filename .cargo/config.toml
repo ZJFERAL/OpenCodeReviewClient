@@ -1,15 +1,7 @@
-# 本项目在 Windows 上用 GNU target 编译（MSVC 在本环境因 UAC 不可安装）。
-# 链接器/资源编译器用 LLVM-MinGW（clang+lld，2026 版），它：
-#   - 能正确链接 Tauri 生成的 Windows 资源（build script 以 gnu host 编译时走 windres）
-#   - 产出的 PE 可在 Win11 正常加载（旧 MinGW 8.1.0 的 ld 会产出崩 0xc0000139 的 PE）
-# 依赖：llvm-mingw-20260922-ucrt-x86_64 解压于 C:/Users/Jeffery/llvm-mingw/；
-#       gnu host 工具链 nightly-x86_64-pc-windows-gnu（使 embed-resource 走 windres）；
-#       libgcc_eh.a 用 libunwind.a 填充（提供 _Unwind_* 符号，compiler-rt 无 libgcc）。
-[build]
-target = "x86_64-pc-windows-gnu"
-
-[target.x86_64-pc-windows-gnu]
-linker = "C:/Users/Jeffery/llvm-mingw/llvm-mingw-20260922-ucrt-x86_64/bin/x86_64-w64-mingw32-gcc.exe"
-rustflags = [
-  "-L", "C:/Users/Jeffery/llvm-mingw/llvm-mingw-20260922-ucrt-x86_64/x86_64-w64-mingw32/lib",
-]
+# 本项目在 Windows 上用默认 MSVC target 编译（本机已装 Visual Studio 生成工具 2026，
+# 实例路径 C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools，详见
+# C:/Users/Jeffery/.kimi-code/MSVC-Windows-Toolchain.md）。
+# 本机默认 host 即 x86_64-pc-windows-msvc，stable / nightly 均含该目标，无需额外配置。
+# 历史说明：实现初期曾误判「MSVC 因 UAC 不可安装」，临时改用 GNU + LLVM-MinGW；
+# 后续实测 MSVC 早已就绪（rustc --target x86_64-pc-windows-msvc 编译运行均 EXIT 0），
+# 故回退到标准 MSVC 路线，删除全部 LLVM-MinGW / gnu host / libgcc 兼容层。

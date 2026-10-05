@@ -2,8 +2,7 @@ mod commands;
 pub mod ocr;
 
 // 仅在启用 `tauri` feature 时编译 app 运行时入口（注册 Tauri command handlers）。
-// 集成测试默认不带该 feature，从而 lib/集成测试/二进制都不链接 tauri，避免本机
-// MinGW 旧 binutils 在 dev/test profile 下报 STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)。
+// 集成测试默认不带该 feature，从而 lib/集成测试/二进制都不链接 tauri，可干净编译。
 #[cfg(feature = "tauri")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

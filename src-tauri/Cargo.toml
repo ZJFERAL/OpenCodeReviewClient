@@ -6,9 +6,7 @@ authors = ["You"]
 edition = "2021"
 
 # Tauri 2: lib 入口被 main.rs 静态链接为二进制。
-# 桌面构建只需 staticlib + rlib；cdylib 仅在移动端（iOS/Android）需要。
-# 此处省略 cdylib 以规避 MinGW 8.1.0 (binutils 2.30) 的「export ordinal too large」
-# 限制——cdylib 会把数万个 Rust 符号塞进 PE 导出表，超过 65535 上限导致 ld 失败。
+# 桌面构建只需 staticlib + rlib；cdylib 仅在移动端（iOS/Android）需要，此处省略。
 [lib]
 name = "app_lib"
 crate-type = ["staticlib", "rlib"]
@@ -23,9 +21,8 @@ serde_json = "1"
 # 这里显式声明以便无 tauri（--no-default-features）测试下仍可编译本模块。
 dirs = "7"
 # `tauri` 设为 optional：默认 features 为空，使 `cargo test` 链接的 lib/集成测试/二进制
-# 都不引入 tauri（本机 MinGW 旧 binutils 在 dev/test profile 下链接 tauri 运行时
-# 会报 STATUS_ENTRYPOINT_NOT_FOUND 0xc0000139）。构建/运行真实 app 时显式开启：
-# `cargo +nightly build --features tauri` 或 `npm run tauri -- dev --features tauri`。
+# 都不引入 tauri（避免 tauri-build 在缺版本信息时 panic，且测试二进制无需链接 GUI 运行时）。
+# 构建/运行真实 app 时显式开启：`cargo build --features tauri` 或 `npm run tauri dev`。
 tauri = { version = "2", features = [], optional = true }
 # Rules Tab 的「选仓库目录」「选文件」需要原生对话框（spec §5.3）。
 # 与 tauri 一样设为 optional 并随 default feature 启用；--no-default-features 集成测试
@@ -35,7 +32,7 @@ tauri-plugin-dialog = { version = "2", optional = true }
 [features]
 # 默认启用 `tauri`，保持与既有 `cargo build` / `npm run tauri dev` 工作流一致（app 正常构建）。
 # 集成测试用 `cargo test --no-default-features` 运行：关掉 tauri feature 后二进制不链接 tauri、
-# build.rs 跳过 tauri_build，从而在本机 MinGW+rust-lld 环境下可干净编译（运行期受工具链限制另见报告）。
+# build.rs 跳过 tauri_build，从而干净编译（测试二进制无需链接 GUI 运行时）。
 default = ["tauri", "tauri-plugin-dialog"]
 
 [profile.release]
