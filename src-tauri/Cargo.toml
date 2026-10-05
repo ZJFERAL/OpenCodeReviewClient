@@ -1,0 +1,46 @@
+[package]
+name = "ocr-desktop-config"
+version = "0.1.0"
+description = "Open Code Review 桌面配置器"
+authors = ["You"]
+edition = "2021"
+
+# Tauri 2: lib 入口被 main.rs 静态链接为二进制。
+# 桌面构建只需 staticlib + rlib；cdylib 仅在移动端（iOS/Android）需要，此处省略。
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 解析用户主目录（~/.opencodereview/config.json）。Task 2/3 已由 tauri 传递依赖间接引入，
+# 这里显式声明以便无 tauri（--no-default-features）测试下仍可编译本模块。
+dirs = "7"
+# `tauri` 设为 optional：默认 features 为空，使 `cargo test` 链接的 lib/集成测试/二进制
+# 都不引入 tauri（避免 tauri-build 在缺版本信息时 panic，且测试二进制无需链接 GUI 运行时）。
+# 构建/运行真实 app 时显式开启：`cargo build --features tauri` 或 `npm run tauri dev`。
+tauri = { version = "2", features = [], optional = true }
+# Rules Tab 的「选仓库目录」「选文件」需要原生对话框（spec §5.3）。
+# 与 tauri 一样设为 optional 并随 default feature 启用；--no-default-features 集成测试
+# 不链接它，避免把 GUI 运行时依赖带进测试二进制。
+tauri-plugin-dialog = { version = "2", optional = true }
+
+[features]
+# 默认启用 `tauri`，保持与既有 `cargo build` / `npm run tauri dev` 工作流一致（app 正常构建）。
+# 集成测试用 `cargo test --no-default-features` 运行：关掉 tauri feature 后二进制不链接 tauri、
+# build.rs 跳过 tauri_build，从而干净编译（测试二进制无需链接 GUI 运行时）。
+default = ["tauri", "tauri-plugin-dialog"]
+
+[profile.release]
+# Tauri 官方推荐的 release 配置（体积/性能平衡）。
+# panic=abort：不展开栈，减小体积（GUI 进程无需 catch_unwind）。
+# lto + codegen-units=1：跨 crate 内联，抵消 opt-level="s" 的取舍，整体更小更快。
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

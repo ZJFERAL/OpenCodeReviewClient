@@ -1,0 +1,60 @@
+// 与后端 `get_config` 返回的 config.json 结构对应的类型。
+// 注意：JSON 里的键名以真实文件为准（snake_case：api_key / custom_providers），
+// 但前端惯用 camelCase，故 ProviderConfig 用 camelCase 字段，由 ipc 层的解析函数
+// 从真实键名映射过来（见 src/ipc.ts 的 normalizeConfig）。
+export type ProviderEntry = { apiKey?: string; model?: string };
+export type CustomProviderEntry = { url?: string; protocol?: string; model?: string };
+
+export type ProviderConfig = {
+  provider?: string;
+  model?: string;
+  maxTokens?: number;
+  effort?: "low" | "medium" | "high";
+  providers?: Record<string, ProviderEntry>;
+  customProviders?: Record<string, CustomProviderEntry>;
+};
+
+// 内置 provider 参考集（spec §4.1 的 `ocr llm providers` 实测列表为 30+；
+// 本任务的静态下拉先内置常用项 + Custom，完整列表留待 list_providers 任务）。
+export const BUILTIN_PROVIDERS = [
+  "anthropic",
+  "openai",
+  "bedrock",
+  "deepseek",
+  "kimi",
+  "qwen",
+] as const;
+
+// 自定义网关的协议选项（映射 `custom_providers.<name>.protocol`）。
+export const CUSTOM_PROTOCOLS = ["openai", "anthropic", "openai-responses"] as const;
+
+export type CustomProtocol = (typeof CUSTOM_PROTOCOLS)[number];
+
+// 审查规则（spec §4.3）。真实 rule.json 落盘键名为 snake_case
+// （`merge_system_rule`），前端统一用 camelCase `mergeSystemRule`，
+// 由 ipc 层读写时做键名映射（与 ProviderConfig 的处理一致）。
+export type Rule = {
+  path: string;
+  rule: string;
+  mergeSystemRule: boolean;
+};
+
+// rule.json 的顶层结构。
+export type RulesFile = {
+  rules: Rule[];
+};
+
+// 审查参数（spec §4.2 / §5.4）。
+// 可持久化（经 `ocr config set` 写顶层键）：仅 max_tokens 与 effort。
+// 不可持久化（`ocr review` 运行时 flag）：timeout/concurrency/format/exclude，仅作命令预览。
+export const EFFORT_LEVELS = ["low", "medium", "high"] as const;
+
+export type Effort = (typeof EFFORT_LEVELS)[number];
+
+// `ocr review --format` 的候选值。
+export const REVIEW_FORMATS = ["text", "json", "sarif"] as const;
+
+export type ReviewFormat = (typeof REVIEW_FORMATS)[number];
+
+// Rules Tab 的作用范围：全局 `~/.opencodereview/rule.json` 或仓库级 `<repo>/.opencodereview/rule.json`。
+export type RulesScope = "global" | "repo";

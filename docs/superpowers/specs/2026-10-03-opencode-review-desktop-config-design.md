@@ -41,9 +41,18 @@
 **前置依赖（实现前必须满足）**：
 
 - Node.js v24（本机已有 v24.21.0）
-- Rust 稳定工具链 + Windows MSVC 构建工具（`rustc` / `cargo`）——本机当前**缺失**，需先安装 [Rustup](https://rustup.rs) 与 Visual Studio Build Tools（含 MSVC）。**这是实现第一步的硬阻塞。**
+- Rust 工具链：**本机用默认 MSVC target（`x86_64-pc-windows-msvc`）**，非 GNU/LLVM-MinGW。
 - 全局安装 `ocr`：本机已装 `open-code-review v1.12.11`（路径 `/d/nodejs/node_global/ocr`）。新机器需 `npm i -g @alibaba-group/open-code-review`
 - 操作系统：以 Windows 11 为主目标（用户环境）；Tauri 跨平台，后续可编译 macOS/Linux 但不在此版本范围
+
+**工具链方案（实现期实测确定，见 §12）**：本机已装 Visual Studio 生成工具 2026（MSVC 可用），
+`rustc --target x86_64-pc-windows-msvc` 编译运行均 EXIT 0，故用标准 MSVC 路线（无需 LLVM-MinGW、
+无需 gnu host、无需 nightly）：
+- 本机默认 host 即 `x86_64-pc-windows-msvc`，stable / nightly 均含该目标。
+- 编译命令：`cargo build`（或 `npm run tauri build`）
+- 测试命令：`cargo test --no-default-features`（`tauri` 设为 optional feature，测试二进制不链接 GUI 运行时）
+- 配置见 `.cargo/config.toml`（已移除全部 GNU / LLVM-MinGW 兼容层）；MSVC 路径权威清单见
+  `C:/Users/Jeffery/.kimi-code/MSVC-Windows-Toolchain.md`。
 
 ## 3. 架构
 
@@ -294,3 +303,38 @@ OpenCodeReviewClient/
 5. Params Tab：可持久化键 set + 命令预览。
 6. 测试：集成测试 + 手动 E2E。
 7. Windows 打包 `.msi` / `.exe`。
+
+## 12. 工具链方案（实现期实测确定）
+
+**重要更正（2026-10-05）**：实现初期曾误判「本机 MSVC 因 UAC 不可安装」，临时改用 GNU + LLVM-MinGW；
+后续实测本机 **MSVC 早已就绪**（Visual Studio 生成工具 2026，实例
+`C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools`，注意**不是**空的 `\2019\` 目录），
+`rustc --target x86_64-pc-windows-msvc` 编译运行均 EXIT 0。故回退到标准 MSVC 路线，删除全部
+LLVM-MinGW / gnu host / libgcc 兼容层。MSVC 路径权威清单见
+`C:/Users/Jeffery/.kimi-code/MSVC-Windows-Toolchain.md`。
+
+**最终方案与依赖**：
+- 本机 `rustup` 默认 host 即 `x86_64-pc-windows-msvc`；`stable` 与 `nightly` 工具链均含 `x86_64-pc-windows-msvc` 目标。用 MSVC 不需要 LLVM-MinGW、不需要 gnu host、不需要 nightly。
+- MSVC 工具集（cl/link/lib/dumpbin）：`C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Tools\MSVC\14.51.36231\bin\Hostx64\x64\`
+- Windows SDK 10.0.26100.0：`C:\Program Files (x86)\Windows Kits\10\`（rc.exe / kernel32.lib 等）
+- `rustc` 会用 `vswhere.exe` 自动定位上述工具，纯 `cargo` / `rustc` 调用通常无需手动设 PATH。
+- **`.cargo/config.toml`**：已清空 GNU 相关配置（仅保留说明注释，不再强制 `[build] target`、不再指定 linker）。
+
+**编译/测试命令**：
+```bash
+cd src-tauri
+cargo build                                  # 构建（默认 MSVC target）
+cargo test --no-default-features             # 集成测试（关掉 tauri feature，不链接 GUI 运行时）
+npm run build                                # 前端
+npm run tauri build                          # 打包 msi/nsis（Tauri 2）
+```
+
+**已知边角限制**：`cargo test` 默认带 `tauri` feature 时，`tauri-build` 在缺少 tauri 版本信息时会
+panic（`"missing cargo:dev instruction"`）。故集成测试用 `--no-default-features`（Cargo.toml 中
+`tauri` 设为 optional，`default = ["tauri", "tauri-plugin-dialog"]`）——关掉后二进制不链接 tauri、
+build.rs 跳过 `tauri_build`，可干净编译。主程序与前端不受影响。
+
+> 历史注记（已废弃，供追溯）：早期 GNU + LLVM-MinGW 路线曾记录 MinGW-w64 8.1.0 (binutils 2.30) 与
+> Win11 加载器不兼容（产物崩 `0xc0000139`），最终用 LLVM-MinGW 20260922 通过。该路线在确认 MSVC
+> 可用后已整体弃用，相关兼容层（libgcc_eh 占位、gnu host、windres）从 `.cargo/config.toml` 与
+> Cargo.toml 注释中移除。

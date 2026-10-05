@@ -1,0 +1,7 @@
+# 本项目在 Windows 上用默认 MSVC target 编译（本机已装 Visual Studio 生成工具 2026，
+# 实例路径 C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools，详见
+# C:/Users/Jeffery/.kimi-code/MSVC-Windows-Toolchain.md）。
+# 本机默认 host 即 x86_64-pc-windows-msvc，stable / nightly 均含该目标，无需额外配置。
+# 历史说明：实现初期曾误判「MSVC 因 UAC 不可安装」，临时改用 GNU + LLVM-MinGW；
+# 后续实测 MSVC 早已就绪（rustc --target x86_64-pc-windows-msvc 编译运行均 EXIT 0），
+# 故回退到标准 MSVC 路线，删除全部 LLVM-MinGW / gnu host / libgcc 兼容层。
