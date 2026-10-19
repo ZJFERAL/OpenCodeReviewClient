@@ -38,6 +38,14 @@ npm test && npm run build
 
 两项都绿才算完成。**不要**只跑其中一项就宣称完成。
 
+> **动了 `commands.rs` 或 `lib.rs` 时，上面这条不够**：`--no-default-features` 会把整个 `commands.rs` 和 `lib.rs` 的 `run()` cfg 掉（它们全是 `#[cfg(feature = "tauri")]`），等于完全没编译到那些代码。必须额外跑一次真实 feature 组合，才能确认新写的 command 能编译：
+>
+> ```bash
+> cd src-tauri && cargo build --features tauri
+> ```
+>
+> 跑完记得 `git restore src-tauri/gen/schemas/`（构建会重写这两个自动生成文件）。
+
 ## 代码地图
 
 | 文件 | 职责 |
@@ -65,13 +73,17 @@ npm test && npm run build
 - 测试用 fake `ocr.cmd` 前置 PATH + 临时目录 mock，绝不碰真实配置。
 - 历史上曾因误执行 `ocr config set` 污染过用户配置，已修复。**不要重蹈。**
 
-### 2. `run_ocr` 直接 spawn `ocr.cmd`，不经 `cmd /c`
+### 2. `run_ocr` 直接 spawn `ocr.cmd`，不经 `cmd /c`，且必须带 `CREATE_NO_WINDOW`
 
 `src-tauri/src/ocr.rs` 的 `run_ocr` 用 `Command::new("ocr.cmd")` **直接执行**。
 
 **不要**改回 `Command::new("cmd").arg("/c").arg("ocr")`——`cmd /c` 裸拼参数时，含 `&` `^` `|` 但**无空格**的值不会被加引号，会被 cmd 二次解析：`sk-abc&def=ghi` 会被截断成 `sk-abc` 并执行 `def=ghi`（凭据静默损坏 + 命令注入）。直接 spawn 时 Rust 会正确加引号转义。
 
 回归测试：`src-tauri/tests/provider_save_test.rs` 的 `set_provider_key_preserves_special_chars`。
+
+**同时必须保留 `creation_flags(CREATE_NO_WINDOW)`（`0x0800_0000`）**：Windows 执行 `.cmd` 必须由 cmd.exe 解释，而 CreateProcess 默认会给该子进程**新建一个控制台窗口**——每次调用 ocr 就闪一次黑窗（保存 Provider 连发多条 `config set` 会连续闪窗）。`CREATE_NO_WINDOW` 抑制该窗口且不影响已重定向的 stdin/stdout/stderr；cmd.exe 后续拉起的 node 继承这个无窗口控制台，整条链都不弹窗。
+
+> 实测方式（关键：父进程必须是 GUI 子系统才复现得出，console 子系统的父进程会让子进程继承其控制台，从而掩盖现象）：用一个 `#![windows_subsystem = "windows"]` 探针 spawn 一个「console 子系统 + 内部 `GetConsoleWindow()` 自检」的子进程，不加标志时报 `HAS_CONSOLE_WINDOW`，加了报 `NO_CONSOLE`。
 
 ### 3. 真实 `config.json` schema（实测确认）
 
@@ -100,7 +112,16 @@ npm test && npm run build
 
 `api_key` 输入一律 `type="password"`；`normalizeConfig` 只记录「是否存在」（置空串），不保留明文。空串语义 = 「未输入/不写入」，**不是**「用户主动清空」——保存时跳过，不覆盖已有 key。
 
-### 6. 界面遵循 mimo-design
+### 6. 所有 `#[tauri::command]` 必须是 `async fn`，同步逻辑走 `spawn_blocking`
+
+`src-tauri/src/commands.rs` 里每个 command 都是 `async fn`，用 `run_blocking`（内部 `tauri::async_runtime::spawn_blocking`）把同步逻辑丢到 blocking 线程池。
+
+**不要**改回同步 `fn`：同步 command 的 body 就地执行完才返回（见 `tauri-macros` 的 `body_blocking`），而 `cmd.output()` 要阻塞等子进程退出。ocr 是 Node CLI，单次启动实测约 0.5s（首次可达 2.6s），逐条下发时 UI 会冻结到无响应。Tauri 官方文档也明确：*"Asynchronous commands are preferred in Tauri to perform heavy work in a manner that doesn't result in UI freezes"*。
+
+- 返回 `Result<_, String>` 的 command 直接 `run_blocking(...).await?`；
+- 返回纯 `OcrResult` 的（`get_config` / `get_rules` / `set_rules`）无法上抛 join 错误，用 `io_error_result()` 归一为 `ok:false` 的失败结果。
+
+### 7. 界面遵循 mimo-design
 
 `src/styles.css` 使用 mimo-design 语义 token。改样式时：
 
@@ -111,7 +132,7 @@ npm test && npm run build
 - 无发光、无彩色阴影、无渐变表面、无 emoji（图标用内联 Lucide SVG）。
 - 浅色为主模式，暗色是 `prefers-color-scheme: dark` 的派生（`#0A0A0A` 纸）。
 
-### 7. 测试靠文本 / label / role，不靠 class
+### 8. 测试靠文本 / label / role，不靠 class
 
 前端测试（Vitest + Testing Library）用 `getByLabelText("API Key")`、`getByRole("button", { name: "保存规则文件" })`、`getByText("Open Code Review 配置器")` 等查询。
 

@@ -23,6 +23,17 @@ pub fn run_ocr(args: &[&str]) -> Result<OcrResult, String> {
         cmd.arg(a);
     }
 
+    // Windows 上执行 `.cmd` 必须由 cmd.exe 解释，而 CreateProcess 默认会给这个子进程
+    // 分配一个新的控制台窗口——于是每次调用 ocr 都会闪出黑窗（保存 Provider 时连发多条
+    // `config set` 就会连续闪窗）。CREATE_NO_WINDOW 抑制该窗口，且不影响已重定向的
+    // stdin/stdout/stderr 管道；cmd.exe 后续拉起的 node 继承这个无窗口控制台，整条链不再弹窗。
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
